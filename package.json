@@ -1,0 +1,55 @@
+{
+  "name": "cloud-bridge-server-optimized",
+  "version": "2.0.0",
+  "description": "High-performance Cloud Bridge Server for SCADA-Mobile communication",
+  "main": "server-optimized.js",
+  "scripts": {
+    "setup-redis": "node scripts/setup-redis.js",
+    "redis:start": "cd redis && redis-server redis.conf",
+    "redis:cli": "cd redis && redis-cli",
+    "start": "node server-optimized.js",
+    "start:dev": "nodemon server-optimized.js",
+    "start:with-redis": "concurrently \"npm run redis:start\" \"wait-on tcp:6379 && npm start\"",
+    "monitor": "node monitor.js"
+  },
+  "keywords": [
+    "scada",
+    "cloud-bridge",
+    "socket.io",
+    "cluster",
+    "high-performance",
+    "redis",
+    "worker-threads"
+  ],
+  "author": "SCADA Team",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "socket.io": "^4.6.1",
+    "@socket.io/redis-adapter": "^8.2.1",
+    "ioredis": "^5.3.2",
+    "cors": "^2.8.5",
+    "compression": "^1.7.4",
+    "uuid": "^9.0.0",
+    "pino": "^8.14.1",
+    "pino-pretty": "^10.0.0",
+    "express-rate-limit": "^6.7.0",
+    "prom-client": "^14.2.0",
+    "dotenv": "^16.0.3",
+    "blessed": "^0.1.81",
+    "blessed-contrib": "^4.11.0",
+    "axios": "^1.4.0"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22",
+    "jest": "^29.5.0",
+    "socket.io-client": "^4.6.1",
+    "artillery": "^2.0.0",
+    "clinic": "^12.1.0",
+    "concurrently": "^8.2.0",
+    "wait-on": "^7.0.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
