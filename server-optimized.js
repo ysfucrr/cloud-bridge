@@ -271,12 +271,116 @@ async function startWorker() {
     }
   }));
 
-  // SSL sertifikalarını yükle
-  const httpsOptions = {
-    key: fs.readFileSync(path.join(__dirname, 'Certificates/imajstone.com-key.pem')),
-    cert: fs.readFileSync(path.join(__dirname, 'Certificates/imajstone.com-crt.pem')),
-    ca: fs.readFileSync(path.join(__dirname, 'Certificates/imajstone.com-chain-only.pem'))
-  };
+  // SSL sertifikalarını dinamik olarak yükle
+  function loadSSLCertificates() {
+    // Paketlenmiş uygulamada ssl-settings.json dosyasını userData klasöründe ara
+    let settingsPath;
+    let defaultCertPath;
+    
+    // Electron uygulaması içinde mi kontrol et
+    const isElectronApp = process.env.ELECTRON_RUN_AS_NODE || process.versions.electron;
+    
+    if (isElectronApp) {
+      // Electron uygulaması
+      if (__dirname.includes('app.asar.unpacked')) {
+        // Paketlenmiş uygulamada, sertifikaları doğrudan app.asar.unpacked içindeki Certificates klasöründen oku
+        defaultCertPath = path.join(__dirname, 'Certificates');
+        logger.info(`Sertifika yolu (paketlenmiş): ${defaultCertPath}`);
+      } else {
+        // Geliştirme ortamı
+        defaultCertPath = path.join(__dirname, '..', 'Certificates');
+        logger.info(`Sertifika yolu (geliştirme): ${defaultCertPath}`);
+      }
+      
+      // SSL ayarları için userData klasörünü kullan (Windows)
+      const userDataPath = process.env.APPDATA
+        ? path.join(process.env.APPDATA, 'SCADA Cloud Bridge Server')
+        : path.join(__dirname, '..');
+      settingsPath = path.join(userDataPath, 'ssl-settings.json');
+      
+      logger.info('Electron SSL yolları:', {
+        dirname: __dirname,
+        certificates: defaultCertPath,
+        settings: settingsPath
+      });
+    } else {
+      // Standalone Node.js uygulaması
+      settingsPath = path.join(__dirname, 'ssl-settings.json');
+      defaultCertPath = path.join(__dirname, 'Certificates');
+    }
+    
+    let sslConfig = {
+      type: 'local', // 'local' veya 'cloudflare'
+      certificatePath: defaultCertPath,
+      keyFile: 'imajstone.com-key.pem',
+      certFile: 'imajstone.com-crt.pem',
+      caFile: 'imajstone.com-chain-only.pem',
+      cloudflareOriginCert: null,
+      cloudflareOriginKey: null
+    };
+
+    // Ayarlar dosyası varsa yükle
+    if (fs.existsSync(settingsPath)) {
+      try {
+        const savedSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        sslConfig = { ...sslConfig, ...savedSettings };
+        logger.info('SSL ayarları yüklendi:', { type: sslConfig.type, path: sslConfig.certificatePath });
+      } catch (error) {
+        logger.warn('SSL ayarları yüklenemedi, varsayılan ayarlar kullanılıyor:', error.message);
+      }
+    } else {
+      logger.info('SSL ayarları bulunamadı, varsayılan ayarlar kullanılıyor:', { path: defaultCertPath });
+    }
+
+    let httpsOptions;
+
+    if (sslConfig.type === 'cloudflare' && sslConfig.cloudflareOriginCert && sslConfig.cloudflareOriginKey) {
+      // Cloudflare Origin Certificate kullan
+      httpsOptions = {
+        key: sslConfig.cloudflareOriginKey,
+        cert: sslConfig.cloudflareOriginCert
+      };
+      logger.info('Cloudflare Origin Certificate kullanılıyor');
+    } else {
+      // Yerel sertifika dosyalarını kullan
+      const keyPath = path.join(sslConfig.certificatePath, sslConfig.keyFile);
+      const certPath = path.join(sslConfig.certificatePath, sslConfig.certFile);
+      const caPath = path.join(sslConfig.certificatePath, sslConfig.caFile);
+
+      // Dosyaların varlığını kontrol et ve detaylı log tut
+      logger.info(`SSL dosya yolları kontrol ediliyor:`, {
+        keyPath,
+        certPath,
+        caPath,
+        dirname: __dirname,
+        certPathExists: fs.existsSync(sslConfig.certificatePath)
+      });
+
+      if (!fs.existsSync(keyPath)) {
+        throw new Error(`SSL key dosyası bulunamadı: ${keyPath}`);
+      }
+      if (!fs.existsSync(certPath)) {
+        throw new Error(`SSL cert dosyası bulunamadı: ${certPath}`);
+      }
+
+      httpsOptions = {
+        key: fs.readFileSync(keyPath),
+        cert: fs.readFileSync(certPath)
+      };
+
+      // CA dosyası varsa ekle
+      if (fs.existsSync(caPath)) {
+        httpsOptions.ca = fs.readFileSync(caPath);
+        logger.info('SSL sertifikaları yüklendi (CA dahil):', { keyPath, certPath, caPath });
+      } else {
+        logger.info('SSL sertifikaları yüklendi (CA olmadan):', { keyPath, certPath });
+      }
+    }
+
+    return httpsOptions;
+  }
+
+  const httpsOptions = loadSSLCertificates();
   
   // Sadece HTTPS sunucusu oluştur
   const httpsServer = https.createServer(httpsOptions, app);

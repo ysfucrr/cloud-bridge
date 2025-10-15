@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SCADA Cloud Bridge Server</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <div class="header-left">
+                <i class="fas fa-server"></i>
+                <h1>SCADA Cloud Bridge Server</h1>
+                <span class="version">v2.0.0</span>
+            </div>
+            <div class="header-right">
+                <div class="status-indicators">
+                    <div class="status-item" id="redis-status">
+                        <i class="fas fa-database"></i>
+                        <span>Redis</span>
+                        <div class="status-dot offline"></div>
+                    </div>
+                    <div class="status-item" id="server-status">
+                        <i class="fas fa-server"></i>
+                        <span>Server</span>
+                        <div class="status-dot offline"></div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <nav class="nav-menu">
+                    <div class="nav-item active" data-tab="dashboard">
+                        <i class="fas fa-tachometer-alt"></i>
+                        <span>Dashboard</span>
+                    </div>
+                    <div class="nav-item" data-tab="connections">
+                        <i class="fas fa-network-wired"></i>
+                        <span>Bağlantılar</span>
+                    </div>
+                    <div class="nav-item" data-tab="monitoring">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Monitoring</span>
+                    </div>
+                    <div class="nav-item" data-tab="logs">
+                        <i class="fas fa-file-alt"></i>
+                        <span>Loglar</span>
+                    </div>
+                    <div class="nav-item" data-tab="settings">
+                        <i class="fas fa-cog"></i>
+                        <span>Ayarlar</span>
+                    </div>
+                </nav>
+
+                <!-- Server Controls -->
+                <div class="server-controls">
+                    <h3>Server Kontrolü</h3>
+                    <div class="control-buttons">
+                        <button id="start-server-btn" class="btn btn-success">
+                            <i class="fas fa-play"></i>
+                            Server Başlat
+                        </button>
+                        <button id="stop-server-btn" class="btn btn-danger" disabled>
+                            <i class="fas fa-stop"></i>
+                            Server Durdur
+                        </button>
+                    </div>
+                    
+                    <h3>Redis Kontrolü</h3>
+                    <div class="control-buttons">
+                        <button id="start-redis-btn" class="btn btn-info">
+                            <i class="fas fa-play"></i>
+                            Redis Başlat
+                        </button>
+                        <button id="stop-redis-btn" class="btn btn-warning" disabled>
+                            <i class="fas fa-stop"></i>
+                            Redis Durdur
+                        </button>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Content Area -->
+            <div class="content-area">
+                <!-- Dashboard Tab -->
+                <div class="tab-content active" id="dashboard-tab">
+                    <div class="dashboard-grid">
+                        <!-- Server Status Card -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-server"></i> Server Durumu</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="status-info">
+                                    <div class="status-row">
+                                        <span>Durum:</span>
+                                        <span id="server-status-text" class="status-offline">Offline</span>
+                                    </div>
+                                    <div class="status-row">
+                                        <span>Port:</span>
+                                        <span id="server-port">443 (HTTPS)</span>
+                                    </div>
+                                    <div class="status-row">
+                                        <span>Uptime:</span>
+                                        <span id="server-uptime">-</span>
+                                    </div>
+                                    <div class="status-row">
+                                        <span>PID:</span>
+                                        <span id="server-pid">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Redis Status Card -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-database"></i> Redis Durumu</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="status-info">
+                                    <div class="status-row">
+                                        <span>Durum:</span>
+                                        <span id="redis-status-text" class="status-offline">Offline</span>
+                                    </div>
+                                    <div class="status-row">
+                                        <span>Port:</span>
+                                        <span id="redis-port">6379</span>
+                                    </div>
+                                    <div class="status-row">
+                                        <span>Bağlantılar:</span>
+                                        <span id="redis-connections">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Connections Overview -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-network-wired"></i> Bağlantı Özeti</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="connection-stats">
+                                    <div class="stat-item">
+                                        <div class="stat-number" id="agent-count">0</div>
+                                        <div class="stat-label">SCADA Agent</div>
+                                    </div>
+                                    <div class="stat-item">
+                                        <div class="stat-number" id="mobile-count">0</div>
+                                        <div class="stat-label">Mobile Client</div>
+                                    </div>
+                                    <div class="stat-item">
+                                        <div class="stat-number" id="total-requests">0</div>
+                                        <div class="stat-label">Toplam İstek</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- System Info -->
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-info-circle"></i> Sistem Bilgisi</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="status-info">
+                                    <div class="status-row">
+                                        <span>Platform:</span>
+                                        <span id="platform-info">-</span>
+                                    </div>
+                                    <div class="status-row">
+                                        <span>Node.js:</span>
+                                        <span id="node-version">-</span>
+                                    </div>
+                                    <div class="status-row">
+                                        <span>Electron:</span>
+                                        <span id="electron-version">-</span>
+                                    </div>
+                                    <div class="status-row">
+                                        <span>Mimari:</span>
+                                        <span id="arch-info">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Connections Tab -->
+                <div class="tab-content" id="connections-tab">
+                    <div class="connections-container">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-desktop"></i> SCADA Agent'ları</h3>
+                                <button class="btn btn-sm btn-primary" id="refresh-agents">
+                                    <i class="fas fa-sync"></i> Yenile
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-container">
+                                    <table class="data-table" id="agents-table">
+                                        <thead>
+                                            <tr>
+                                                <th>ID</th>
+                                                <th>Bağlantı Zamanı</th>
+                                                <th>Uptime</th>
+                                                <th>Transport</th>
+                                                <th>Durum</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr class="no-data">
+                                                <td colspan="5">Bağlı agent bulunamadı</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-mobile-alt"></i> Mobile Client'lar</h3>
+                                <button class="btn btn-sm btn-primary" id="refresh-clients">
+                                    <i class="fas fa-sync"></i> Yenile
+                                </button>
+                            </div>
+                            <div class="card-body">
+                                <div class="table-container">
+                                    <table class="data-table" id="clients-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Client ID</th>
+                                                <th>Bağlantı Zamanı</th>
+                                                <th>İzlenen Register'lar</th>
+                                                <th>Durum</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr class="no-data">
+                                                <td colspan="4">Bağlı mobile client bulunamadı</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Monitoring Tab -->
+                <div class="tab-content" id="monitoring-tab">
+                    <div class="monitoring-container">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-chart-line"></i> Performans Metrikleri</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="metrics-grid">
+                                    <div class="metric-item">
+                                        <div class="metric-value" id="cpu-usage">0%</div>
+                                        <div class="metric-label">CPU Kullanımı</div>
+                                    </div>
+                                    <div class="metric-item">
+                                        <div class="metric-value" id="memory-usage">0 MB</div>
+                                        <div class="metric-label">Bellek Kullanımı</div>
+                                    </div>
+                                    <div class="metric-item">
+                                        <div class="metric-value" id="queue-size">0</div>
+                                        <div class="metric-label">Kuyruk Boyutu</div>
+                                    </div>
+                                    <div class="metric-item">
+                                        <div class="metric-value" id="processed-count">0</div>
+                                        <div class="metric-label">İşlenen Veri</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logs Tab -->
+                <div class="tab-content" id="logs-tab">
+                    <div class="logs-container">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-file-alt"></i> Server Logları</h3>
+                                <div class="log-controls">
+                                    <button class="btn btn-sm btn-secondary" id="clear-logs">
+                                        <i class="fas fa-trash"></i> Temizle
+                                    </button>
+                                    <button class="btn btn-sm btn-info" id="auto-scroll-toggle">
+                                        <i class="fas fa-arrow-down"></i> Otomatik Kaydır
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div class="log-viewer" id="log-viewer">
+                                    <div class="log-entry info">
+                                        <span class="log-time">[Başlangıç]</span>
+                                        <span class="log-message">SCADA Cloud Bridge Server UI başlatıldı</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Tab -->
+                <div class="tab-content" id="settings-tab">
+                    <div class="settings-container">
+                        <div class="card">
+                            <div class="card-header">
+                                <h3><i class="fas fa-cog"></i> Ayarlar</h3>
+                            </div>
+                            <div class="card-body">
+                                <div class="settings-form">
+                                    <div class="form-group">
+                                        <label for="https-port">HTTPS Port:</label>
+                                        <input type="number" id="https-port" value="443" min="1" max="65535">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="redis-port">Redis Port:</label>
+                                        <input type="number" id="redis-port" value="6379" min="1" max="65535">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="log-level">Log Seviyesi:</label>
+                                        <select id="log-level">
+                                            <option value="error">Error</option>
+                                            <option value="warn">Warning</option>
+                                            <option value="info" selected>Info</option>
+                                            <option value="debug">Debug</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            <input type="checkbox" id="auto-start-redis"> Redis'i otomatik başlat
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>
+                                            <input type="checkbox" id="auto-start-server"> Server'ı otomatik başlat
+                                        </label>
+                                    </div>
+                                    
+                                    <div class="form-section">
+                                        <h4><i class="fas fa-certificate"></i> SSL Sertifika Ayarları</h4>
+                                        <div class="ssl-config">
+                                            <div class="form-group">
+                                                <label>Sertifika Türü:</label>
+                                                <select id="ssl-type">
+                                                    <option value="local">Yerel Sertifika Dosyaları</option>
+                                                    <option value="cloudflare">Cloudflare Origin Certificate</option>
+                                                </select>
+                                            </div>
+                                            
+                                            <div id="local-ssl-config" class="ssl-option">
+                                                <div class="form-group">
+                                                    <label>Sertifika Klasörü:</label>
+                                                    <div class="file-input-group">
+                                                        <input type="text" id="certificate-path" readonly placeholder="Sertifika klasörü seçin...">
+                                                        <button type="button" class="btn btn-secondary" id="select-certificate-folder">
+                                                            <i class="fas fa-folder-open"></i> Seç
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                
+                                                <div class="form-row">
+                                                    <div class="form-group">
+                                                        <label>Key Dosyası:</label>
+                                                        <input type="text" id="key-file" placeholder="örn: server-key.pem">
+                                                    </div>
+                                                    <div class="form-group">
+                                                        <label>Cert Dosyası:</label>
+                                                        <input type="text" id="cert-file" placeholder="örn: server-cert.pem">
+                                                    </div>
+                                                </div>
+                                                
+                                                <div class="form-group">
+                                                    <label>CA Dosyası (Opsiyonel):</label>
+                                                    <input type="text" id="ca-file" placeholder="örn: ca-chain.pem">
+                                                </div>
+                                                
+                                                <div id="ssl-files-list" class="ssl-files-preview"></div>
+                                            </div>
+                                            
+                                            <div id="cloudflare-ssl-config" class="ssl-option" style="display: none;">
+                                                <div class="form-group">
+                                                    <label>Cloudflare Origin Certificate:</label>
+                                                    <textarea id="cloudflare-cert" rows="8" placeholder="-----BEGIN CERTIFICATE-----
+...
+-----END CERTIFICATE-----"></textarea>
+                                                </div>
+                                                
+                                                <div class="form-group">
+                                                    <label>Cloudflare Origin Private Key:</label>
+                                                    <textarea id="cloudflare-key" rows="8" placeholder="-----BEGIN PRIVATE KEY-----
+...
+-----END PRIVATE KEY-----"></textarea>
+                                                </div>
+                                                
+                                                <div class="info-box">
+                                                    <i class="fas fa-info-circle"></i>
+                                                    <p>Cloudflare Origin Certificate'ı Cloudflare Dashboard > SSL/TLS > Origin Server bölümünden oluşturabilirsiniz.</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="form-actions">
+                                        <button class="btn btn-primary" id="save-settings">
+                                            <i class="fas fa-save"></i> Kaydet
+                                        </button>
+                                        <button class="btn btn-secondary" id="reset-settings">
+                                            <i class="fas fa-undo"></i> Sıfırla
+                                        </button>
+                                        <button class="btn btn-info" id="test-ssl">
+                                            <i class="fas fa-check-circle"></i> SSL Test Et
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="loading-spinner">
+            <i class="fas fa-spinner fa-spin"></i>
+            <p>Yükleniyor...</p>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
