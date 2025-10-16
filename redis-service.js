@@ -183,18 +183,117 @@ class RedisService {
     await this.client.hset('agents', socketId, JSON.stringify(agentData));
     await this.client.sadd('agent:ids', socketId);
     
-    logger.info(`Agent registered in Redis: ${socketId}`);
+    // Machine ID varsa, eşleştirme tablosunu güncelle
+    if (agentInfo.machineId) {
+      await this.addMachineIdMapping(agentInfo.machineId, socketId);
+      logger.info(`Agent registered in Redis with machine ID: ${socketId} -> ${agentInfo.machineId}`);
+    } else {
+      logger.info(`Agent registered in Redis: ${socketId}`);
+    }
   }
 
   async removeAgent(socketId) {
+    // Önce agent verilerini al (machine ID için)
+    const agentData = await this.client.hget('agents', socketId);
+    let machineId = null;
+    
+    if (agentData) {
+      try {
+        const agent = JSON.parse(agentData);
+        machineId = agent.machineId;
+      } catch (e) {
+        logger.error(`Failed to parse agent data for ${socketId}:`, e);
+      }
+    }
+    
+    // Agent kaydını sil
     const removed = await this.client.hdel('agents', socketId);
     const removedFromSet = await this.client.srem('agent:ids', socketId);
+    
+    // Eğer machine ID varsa ve bu socket ID ile eşleşiyorsa, eşleştirmeyi sil
+    if (machineId) {
+      const currentSocketId = await this.getMachineIdMapping(machineId);
+      if (currentSocketId === socketId) {
+        await this.removeMachineIdMapping(machineId);
+        logger.debug(`Removed machine ID mapping for ${machineId} -> ${socketId}`);
+      }
+    }
+    
+    // Socket ID'den machine ID'ye olan eşleştirmeyi her durumda sil
+    await this.client.hdel('socket-id:to:machine-id', socketId);
     
     if (removed || removedFromSet) {
       logger.info(`Agent removed from Redis: ${socketId}`);
     }
     
     return removed || removedFromSet;
+  }
+  
+  // Machine ID - Socket ID eşleştirme fonksiyonları
+  
+  /**
+   * Machine ID'yi verilen Socket ID ile eşleştirir
+   * @param {string} machineId - Machine ID
+   * @param {string} socketId - Socket ID
+   * @returns {Promise<void>}
+   */
+  async addMachineIdMapping(machineId, socketId) {
+    const pipeline = this.client.pipeline();
+    
+    // İki yönlü eşleştirme: Machine ID -> Socket ID ve Socket ID -> Machine ID
+    pipeline.hset('machine-id:to:socket-id', machineId, socketId);
+    pipeline.hset('socket-id:to:machine-id', socketId, machineId);
+    
+    await pipeline.exec();
+    logger.debug(`Machine ID mapping added: ${machineId} <-> ${socketId}`);
+  }
+  
+  /**
+   * Machine ID için eşleşen Socket ID'yi alır
+   * @param {string} machineId - Machine ID
+   * @returns {Promise<string|null>} - Eşleşen Socket ID
+   */
+  async getMachineIdMapping(machineId) {
+    return await this.client.hget('machine-id:to:socket-id', machineId);
+  }
+  
+  /**
+   * Socket ID için eşleşen Machine ID'yi alır
+   * @param {string} socketId - Socket ID
+   * @returns {Promise<string|null>} - Eşleşen Machine ID
+   */
+  async getSocketIdMapping(socketId) {
+    return await this.client.hget('socket-id:to:machine-id', socketId);
+  }
+  
+  /**
+   * Machine ID eşleştirmesini siler
+   * @param {string} machineId - Machine ID
+   * @returns {Promise<boolean>} - Silme işleminin sonucu
+   */
+  async removeMachineIdMapping(machineId) {
+    // Önce bu machine ID'ye eşleşen socket ID'yi bul
+    const socketId = await this.getMachineIdMapping(machineId);
+    
+    const pipeline = this.client.pipeline();
+    pipeline.hdel('machine-id:to:socket-id', machineId);
+    
+    // Eğer socket ID bulunursa, ters eşleştirmeyi de sil
+    if (socketId) {
+      pipeline.hdel('socket-id:to:machine-id', socketId);
+    }
+    
+    await pipeline.exec();
+    logger.debug(`Machine ID mapping removed: ${machineId}`);
+    return true;
+  }
+  
+  /**
+   * Tüm machine ID eşleştirmelerini alır
+   * @returns {Promise<Object>} - Machine ID -> Socket ID eşleştirmeleri
+   */
+  async getAllMachineIdMappings() {
+    return await this.client.hgetall('machine-id:to:socket-id');
   }
 
   // Agent health check - stale agent'ları temizle
@@ -314,6 +413,10 @@ class RedisService {
     // Delete agent hash and set
     pipeline.del('agents');
     pipeline.del('agent:ids');
+    
+    // Machine ID eşleştirmelerini de temizle
+    pipeline.del('machine-id:to:socket-id');
+    pipeline.del('socket-id:to:machine-id');
     
     // Clear all watch-related data
     // Get all keys matching watch patterns - prefix dahil

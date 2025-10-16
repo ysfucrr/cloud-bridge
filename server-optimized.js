@@ -548,10 +548,12 @@ async function startWorker() {
 
   const batchProcessor = new BatchProcessor(io, workerPool);
 
-  // Store connected agents with timestamp and name for diagnostics
+  // Store connected agents with timestamp, name, and machine ID for diagnostics
   const connectedAgents = new Set();
   const agentConnectTimes = new Map(); // Track when each agent connected
   const agentNames = new Map(); // Track agent names for identification
+  const agentMachineIds = new Map(); // Track machine IDs for persistent identification
+  const machineIdToSocketId = new Map(); // Lookup table from machineId to current socketId
   const pendingRequests = new Map();
   
   // Log connection stats every 5 minutes for diagnostics (only if there are connections)
@@ -594,11 +596,13 @@ async function startWorker() {
       for (const agent of connectedAgents) {
         const connectTime = agentConnectTimes.get(agent.id);
         const agentName = agentNames.get(agent.id) || `Agent-${agent.id.substring(0, 6)}`;
+        const machineId = agentMachineIds.get(agent.id) || null;
         
         if (connectTime) {
           agentData.push({
             id: agent.id.substring(0, 8),
             name: agentName,
+            machineId: machineId ? machineId : undefined,
             connectedAt: new Date(connectTime).toISOString(),
             uptime: Math.floor((Date.now() - connectTime) / 1000),
             transport: agent.conn?.transport?.name || 'unknown'
@@ -769,22 +773,23 @@ async function startWorker() {
       });
     }
 
-    let method, path, body, targetAgentId;
+    let method, path, body, targetAgentId, targetMachineId;
     
     if (req.method === 'POST') {
-      ({ method, path, body, targetAgentId } = req.body);
+      ({ method, path, body, targetAgentId, targetMachineId } = req.body);
       // Add debug logging for login requests
       if (path && path.includes('/api/mobile-users/login')) {
-        logger.info(`Login request received for agent: ${targetAgentId}`, {
+        logger.info(`Login request received for agent: ${targetAgentId || targetMachineId}`, {
           path,
           username: body?.username,
-          hasTargetAgent: !!targetAgentId
+          hasTargetAgent: !!targetAgentId || !!targetMachineId
         });
       }
     } else if (req.method === 'GET') {
       method = req.query.method || 'GET';
       path = req.query.path;
       targetAgentId = req.query.targetAgentId;
+      targetMachineId = req.query.targetMachineId;
       try {
         body = req.query.body ? JSON.parse(req.query.body) : {};
       } catch (err) {
@@ -810,30 +815,74 @@ async function startWorker() {
     }
 
     try {
-      // Belirli bir agent ID'si belirtilmişse onu kullan, yoksa ilk bağlı agent'ı seç
+      // Belirli bir agent veya machine ID'si belirtilmişse onu kullan, yoksa ilk bağlı agent'ı seç
       let selectedAgent;
       
-      if (targetAgentId) {
-        // Agent ID'sine göre seçim yap
+      if (targetMachineId) {
+        // ÖNCELİKLE machine ID'ye göre socket ID'sini bul - birincil arama yöntemi
+        
+        // 1. Önce Memory'deki mapten kontrol et (hızlı erişim için)
+        let socketId = machineIdToSocketId.get(targetMachineId);
+        
+        // 2. Eğer memory'de bulunamadıysa Redis'ten kontrol et (kalıcı mapping için)
+        if (!socketId) {
+          try {
+            socketId = await redisService.getMachineIdMapping(targetMachineId);
+            if (socketId) {
+              logger.debug(`Found machine ID mapping in Redis: ${targetMachineId} -> ${socketId}`);
+              // Memory'deki mapi güncelle
+              machineIdToSocketId.set(targetMachineId, socketId);
+            }
+          } catch (error) {
+            logger.error(`Error fetching machine ID mapping from Redis: ${error.message}`);
+          }
+        }
+        
+        // Socket ID bulunduysa, bu ID ile agent'ı bul
+        if (socketId) {
+          selectedAgent = Array.from(connectedAgents).find(agent => agent.id === socketId);
+          
+          if (selectedAgent) {
+            logger.debug(`Found agent by machine ID: ${targetMachineId} -> socket ID: ${socketId}`);
+          } else {
+            logger.warn(`Machine ID ${targetMachineId} maps to socket ID ${socketId} but socket not found in connected agents`);
+            // Socket ID haritada var ama bağlı değil - haritayı güncelle
+            machineIdToSocketId.delete(targetMachineId);
+            // Redis'i güncelleme - yeniden bağlantı için saklı kalsın
+          }
+        } else {
+          logger.warn(`Requested machine ID ${targetMachineId} not found in mapping table or Redis`);
+        }
+      } else if (targetAgentId) {
+        // Sadece socket ID belirtilmişse, doğrudan socket ID ile ara
         selectedAgent = Array.from(connectedAgents).find(agent => agent.id === targetAgentId);
         
-        // Belirtilen ID ile agent bulunamadıysa hata ver
-        if (!selectedAgent) {
-          logger.warn(`Requested agent ID ${targetAgentId} is not connected`);
-          return res.status(404).json({
-            error: 'Agent Not Found',
-            message: `The specified agent (${targetAgentId}) is not connected`
-          });
+        if (selectedAgent) {
+          logger.debug(`Found agent by socket ID: ${targetAgentId}`);
         }
+      }
+      
+      // Belirtilen ID'ler ile agent bulunamadıysa hata ver
+      if ((targetAgentId || targetMachineId) && !selectedAgent) {
+        const idType = targetMachineId ? "machine" : "agent";
+        const idValue = targetMachineId || targetAgentId;
         
-        // Login işlemleri için özel log
-        if (path && path.includes('/api/mobile-users/login')) {
-          logger.info(`Routing login request to agent: ${targetAgentId} (${agentNames.get(targetAgentId) || 'Unknown'})`);
-        }
-      } else {
-        // ID belirtilmediyse ilk agent'ı kullan
+        logger.warn(`Requested ${idType} ID ${idValue} is not connected`);
+        return res.status(404).json({
+          error: 'Agent Not Found',
+          message: `The specified ${idType} (${idValue}) is not connected`
+        });
+      }
+      
+      // Eğer agent bulunamadıysa ve belirli bir ID belirtilmediyse, ilk bağlı agent'ı kullan
+      if (!selectedAgent) {
         selectedAgent = Array.from(connectedAgents)[0];
-        logger.warn(`No target agent specified for request to ${path}, using default agent: ${selectedAgent.id}`);
+        logger.warn(`No target agent specified or found for request to ${path}, using default agent: ${selectedAgent.id}`);
+      }
+      
+      // Login işlemleri için özel log
+      if (path && path.includes('/api/mobile-users/login')) {
+        logger.info(`Routing login request to agent: ${selectedAgent.id} (${agentNames.get(selectedAgent.id) || 'Unknown'})`);
       }
       
       const requestId = uuidv4();
@@ -1059,19 +1108,72 @@ async function startWorker() {
         logger.info('Agent identified:', data);
         socket.agentInfo = data;
         
+        // Agent bilgileri oluştur
+        const agentInfo = {
+          socketId: socket.id,
+          ...data
+        };
+        
         // Eğer agent ismi belirtilmişse kaydet
         if (data && data.agentName) {
           const agentName = data.agentName;
           agentNames.set(socket.id, agentName);
           logger.info(`Agent name registered: ${socket.id} => ${agentName}`);
+          agentInfo.agentName = agentName;
         } else {
           // İsim yoksa default bir isim ata
           const defaultName = `Agent-${socket.id.substring(0, 6)}`;
           agentNames.set(socket.id, defaultName);
+          agentInfo.agentName = defaultName;
           logger.info(`No agent name provided, using default: ${defaultName}`);
         }
         
-        // Name ataması zaten yukarıda yapıldı
+        // Machine ID işleme - her zaman aynı machine ID için en güncel socket ID'yi kullan
+        if (data && data.machineId) {
+          const machineId = data.machineId;
+          
+          // Bu machine ID daha önce farklı bir socket ile kaydedilmiş mi kontrol et
+          const existingSocketId = machineIdToSocketId.get(machineId);
+          if (existingSocketId && existingSocketId !== socket.id) {
+            const existingSocket = Array.from(connectedAgents).find(a => a.id === existingSocketId);
+            if (existingSocket) {
+              logger.info(`Machine ID ${machineId} already connected with socket ${existingSocketId}, updating to new socket ${socket.id}`);
+              
+              // Eski socket bağlantısını kapatmaya çalış - çift bağlantıları önlemek için
+              try {
+                logger.info(`Attempting to close old socket connection: ${existingSocketId}`);
+                existingSocket.disconnect(true);
+                connectedAgents.delete(existingSocket);
+                logger.info(`Successfully closed old socket: ${existingSocketId}`);
+              } catch (error) {
+                logger.error(`Error closing old socket ${existingSocketId}: ${error.message}`);
+              }
+            }
+          }
+          
+          // Machine ID - Socket ID eşleşmelerini kaydet/güncelle
+          agentMachineIds.set(socket.id, machineId);
+          machineIdToSocketId.set(machineId, socket.id);
+          logger.info(`Machine ID registered: ${machineId} => ${socket.id}`);
+          
+          // Redis'e de kaydet - kalıcı bir eşleştirme için
+          try {
+            await redisService.addMachineIdMapping(machineId, socket.id);
+            logger.info(`Machine ID registered in Redis: ${machineId} => ${socket.id}`);
+          } catch (error) {
+            logger.error(`Failed to register machine ID in Redis: ${error.message}`);
+          }
+        } else {
+          logger.warn(`Agent ${socket.id} did not provide a machine ID!`);
+        }
+        
+        // Agent bilgilerini Redis'e kaydet
+        try {
+          await redisService.addAgent(socket.id, agentInfo);
+          logger.debug(`Agent info stored in Redis: ${socket.id}`);
+        } catch (error) {
+          logger.error(`Failed to store agent info in Redis: ${error.message}`);
+        }
         
         // Agent bağlandığında mevcut tüm watch'ları agent'a bildir
         try {
@@ -1182,8 +1284,34 @@ async function startWorker() {
         logger.info(`Agent disconnected: ${reason} (duration: ${connectionDuration}s)`);
         metrics.activeConnections.dec({ type: 'agent' });
         
+        // Clean up machine ID mapping if exists
+        const machineId = agentMachineIds.get(socket.id);
+        if (machineId) {
+          // Only remove the mapping if this socket still owns it
+          if (machineIdToSocketId.get(machineId) === socket.id) {
+            machineIdToSocketId.delete(machineId);
+            logger.debug(`Removed machine ID mapping for ${machineId}`);
+            
+            // Redis'ten kalıcı eşleştirmeyi silmeye gerek yok
+            // Reconnect zamanı için Redis'te saklı kalsın
+            logger.debug(`Keeping machine ID mapping in Redis for reconnect: ${machineId}`);
+          }
+          agentMachineIds.delete(socket.id);
+        }
+        
+        // Clean up name mapping
+        agentNames.delete(socket.id);
+        
         connectedAgents.delete(socket);
         agentConnectTimes.delete(socket.id);
+        
+        // Redis'ten agent kaydını temizle - ama silme, online olmayanlar listesine ekle
+        try {
+          await redisService.updateAgentPing(socket.id); // Son ping zamanını güncelle
+          logger.debug(`Updated last ping time for disconnected agent: ${socket.id}`);
+        } catch (error) {
+          logger.error(`Failed to update agent ping time in Redis: ${error.message}`);
+        }
         
         logger.info(`Agent count after disconnect: ${connectedAgents.size}`);
         
