@@ -773,6 +773,14 @@ async function startWorker() {
     
     if (req.method === 'POST') {
       ({ method, path, body, targetAgentId } = req.body);
+      // Add debug logging for login requests
+      if (path && path.includes('/api/mobile-users/login')) {
+        logger.info(`Login request received for agent: ${targetAgentId}`, {
+          path,
+          username: body?.username,
+          hasTargetAgent: !!targetAgentId
+        });
+      }
     } else if (req.method === 'GET') {
       method = req.query.method || 'GET';
       path = req.query.path;
@@ -817,9 +825,15 @@ async function startWorker() {
             message: `The specified agent (${targetAgentId}) is not connected`
           });
         }
+        
+        // Login işlemleri için özel log
+        if (path && path.includes('/api/mobile-users/login')) {
+          logger.info(`Routing login request to agent: ${targetAgentId} (${agentNames.get(targetAgentId) || 'Unknown'})`);
+        }
       } else {
         // ID belirtilmediyse ilk agent'ı kullan
         selectedAgent = Array.from(connectedAgents)[0];
+        logger.warn(`No target agent specified for request to ${path}, using default agent: ${selectedAgent.id}`);
       }
       
       const requestId = uuidv4();
@@ -844,6 +858,15 @@ async function startWorker() {
           }
         }, CONFIG.REQUEST_TIMEOUT);
         
+        // Debug için login request details
+        if (path && path.includes('/api/mobile-users/login')) {
+          logger.debug('Sending login request to agent', {
+            agentId: selectedAgent.id,
+            agentName: agentNames.get(selectedAgent.id) || 'Unknown',
+            requestId
+          });
+        }
+        
         selectedAgent.emit('api-request', requestData, (response) => {
           if (response && response.status) {
             clearTimeout(timeoutId);
@@ -861,6 +884,15 @@ async function startWorker() {
       });
       
       logger.debug(`API complete: ${result.status} (ID: ${requestId})`);
+      
+      // Login response için özel log
+      if (path && path.includes('/api/mobile-users/login')) {
+        logger.info(`Login response from agent ${selectedAgent.id}: status ${result.status}`, {
+          success: result.status === 200,
+          agentName: agentNames.get(selectedAgent.id) || 'Unknown'
+        });
+      }
+      
       return res.status(result.status).json(result.data);
       
     } catch (err) {
