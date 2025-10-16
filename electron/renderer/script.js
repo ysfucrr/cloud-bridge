@@ -349,6 +349,7 @@ function updateAgentsTable(agentsData) {
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td>${agent.id}</td>
+                <td>${agent.name || 'İsimsiz Agent'}</td>
                 <td>${new Date(agent.connectedAt).toLocaleString('tr-TR')}</td>
                 <td>${formatUptime(agent.uptime)}</td>
                 <td>${agent.transport}</td>
@@ -357,7 +358,7 @@ function updateAgentsTable(agentsData) {
             tbody.appendChild(row);
         });
     } else {
-        tbody.innerHTML = '<tr class="no-data"><td colspan="5">Bağlı agent bulunamadı</td></tr>';
+        tbody.innerHTML = '<tr class="no-data"><td colspan="6">Bağlı agent bulunamadı</td></tr>';
     }
 }
 

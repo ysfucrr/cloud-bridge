@@ -548,9 +548,10 @@ async function startWorker() {
 
   const batchProcessor = new BatchProcessor(io, workerPool);
 
-  // Store connected agents with timestamp for diagnostics
+  // Store connected agents with timestamp and name for diagnostics
   const connectedAgents = new Set();
   const agentConnectTimes = new Map(); // Track when each agent connected
+  const agentNames = new Map(); // Track agent names for identification
   const pendingRequests = new Map();
   
   // Log connection stats every 5 minutes for diagnostics (only if there are connections)
@@ -560,6 +561,26 @@ async function startWorker() {
       logger.info(`Connections: ${connectedAgents.size} agents, ${clientCount} mobile clients`);
     }
   }, 300000); // 5 dakika
+
+  // Helper function to get a list of connected agents with names
+  async function getConnectedAgentsList() {
+    const agentsList = [];
+    
+    for (const agent of connectedAgents) {
+      const agentId = agent.id;
+      const agentName = agentNames.get(agentId) || `Agent-${agentId.substring(0, 6)}`;
+      const connectTime = agentConnectTimes.get(agentId);
+      
+      agentsList.push({
+        id: agentId,
+        name: agentName,
+        connectedAt: connectTime ? new Date(connectTime).toISOString() : null,
+        uptime: connectTime ? Math.floor((Date.now() - connectTime) / 1000) : 0
+      });
+    }
+    
+    return agentsList;
+  }
 
   // Diagnostic endpoint - provides detailed information for mobile debugging
   app.get('/api/mobile/diagnostic', async (req, res) => {
@@ -572,9 +593,12 @@ async function startWorker() {
       const agentData = [];
       for (const agent of connectedAgents) {
         const connectTime = agentConnectTimes.get(agent.id);
+        const agentName = agentNames.get(agent.id) || `Agent-${agent.id.substring(0, 6)}`;
+        
         if (connectTime) {
           agentData.push({
             id: agent.id.substring(0, 8),
+            name: agentName,
             connectedAt: new Date(connectTime).toISOString(),
             uptime: Math.floor((Date.now() - connectTime) / 1000),
             transport: agent.conn?.transport?.name || 'unknown'
@@ -623,6 +647,13 @@ async function startWorker() {
     const queueSize = await redisService.getQueueSize();
     const { connectedCount, pingableCount } = await checkAgentConnections();
     
+    // Get connected agent names
+    const connectedAgentNames = [];
+    for (const agent of connectedAgents) {
+      const agentName = agentNames.get(agent.id) || `Agent-${agent.id.substring(0, 6)}`;
+      connectedAgentNames.push(agentName);
+    }
+    
     const health = {
       status: 'ok',
       worker: process.pid,
@@ -631,7 +662,8 @@ async function startWorker() {
       connections: {
         agents: {
           total: connectedCount,
-          responsive: pingableCount
+          responsive: pingableCount,
+          names: connectedAgentNames
         },
         clients: await getClientCount()
       },
@@ -650,6 +682,25 @@ async function startWorker() {
     };
     
     res.json(health);
+  });
+  
+  // Agent list endpoint for mobile clients
+  app.get('/api/mobile/agents', async (req, res) => {
+    try {
+      const agentList = await getConnectedAgentsList();
+      
+      res.json({
+        status: 'ok',
+        count: agentList.length,
+        agents: agentList
+      });
+    } catch (error) {
+      logger.error('Error in agent list endpoint:', error);
+      res.status(500).json({
+        error: 'Internal server error',
+        message: error.message
+      });
+    }
   });
 
   // Metrics endpoint
@@ -706,7 +757,7 @@ async function startWorker() {
     }
   }, 30000); // 30 saniye
 
-  // Main proxy API endpoint - Tek worker ile basitleştirilmiş
+  // Main proxy API endpoint with agent selection support
   app.use('/api/proxy', async (req, res) => {
     // Tek worker olduğu için sadece local agent'ları kontrol et
     if (connectedAgents.size === 0) {
@@ -718,13 +769,14 @@ async function startWorker() {
       });
     }
 
-    let method, path, body;
+    let method, path, body, targetAgentId;
     
     if (req.method === 'POST') {
-      ({ method, path, body } = req.body);
+      ({ method, path, body, targetAgentId } = req.body);
     } else if (req.method === 'GET') {
       method = req.query.method || 'GET';
       path = req.query.path;
+      targetAgentId = req.query.targetAgentId;
       try {
         body = req.query.body ? JSON.parse(req.query.body) : {};
       } catch (err) {
@@ -750,7 +802,26 @@ async function startWorker() {
     }
 
     try {
-      const agent = Array.from(connectedAgents)[0];
+      // Belirli bir agent ID'si belirtilmişse onu kullan, yoksa ilk bağlı agent'ı seç
+      let selectedAgent;
+      
+      if (targetAgentId) {
+        // Agent ID'sine göre seçim yap
+        selectedAgent = Array.from(connectedAgents).find(agent => agent.id === targetAgentId);
+        
+        // Belirtilen ID ile agent bulunamadıysa hata ver
+        if (!selectedAgent) {
+          logger.warn(`Requested agent ID ${targetAgentId} is not connected`);
+          return res.status(404).json({
+            error: 'Agent Not Found',
+            message: `The specified agent (${targetAgentId}) is not connected`
+          });
+        }
+      } else {
+        // ID belirtilmediyse ilk agent'ı kullan
+        selectedAgent = Array.from(connectedAgents)[0];
+      }
+      
       const requestId = uuidv4();
       
       const requestData = {
@@ -760,7 +831,7 @@ async function startWorker() {
         body: body || {}
       };
 
-      logger.debug(`API request: ${method} ${path} (ID: ${requestId})`);
+      logger.debug(`API request to agent ${selectedAgent.id}: ${method} ${path} (ID: ${requestId})`);
 
       const result = await new Promise((resolve, reject) => {
         pendingRequests.set(requestId, { resolve, reject });
@@ -773,14 +844,14 @@ async function startWorker() {
           }
         }, CONFIG.REQUEST_TIMEOUT);
         
-        agent.emit('api-request', requestData, (response) => {
+        selectedAgent.emit('api-request', requestData, (response) => {
           if (response && response.status) {
             clearTimeout(timeoutId);
             pendingRequests.delete(requestId);
-            logger.debug(`API response: status ${response.status} (ID: ${requestId})`);
+            logger.debug(`API response from agent ${selectedAgent.id}: status ${response.status} (ID: ${requestId})`);
             resolve(response);
           } else {
-            logger.warn(`Invalid API response format from agent (ID: ${requestId})`, { response });
+            logger.warn(`Invalid API response format from agent ${selectedAgent.id} (ID: ${requestId})`, { response });
             // Still resolve with what we got to prevent hanging
             clearTimeout(timeoutId);
             pendingRequests.delete(requestId);
@@ -826,15 +897,56 @@ async function startWorker() {
       await redisService.client.sadd(`mobile:${socket.id}`, ''); // Boş set oluştur
       await redisService.client.expire(`mobile:${socket.id}`, 86400); // 24 saat TTL
       
+      // Selected agent bilgisini saklamak için bir değişken
+      let selectedAgentId = null;
+      
+      // Mobil istemcinin agent seçme event'i
+      socket.on('select-agent', (data) => {
+        const { agentId } = data;
+        
+        // Belirtilen agent ID var mı kontrol et
+        const agentExists = Array.from(connectedAgents).some(agent => agent.id === agentId);
+        
+        if (agentExists) {
+          selectedAgentId = agentId;
+          logger.debug(`Mobile client ${socket.id} selected agent: ${agentId}`);
+          
+          // Agent seçimi başarılı olduğunu bildir
+          socket.emit('agent-selected', {
+            success: true,
+            agentId,
+            agentName: agentNames.get(agentId) || `Agent-${agentId.substring(0, 6)}`
+          });
+        } else {
+          logger.warn(`Mobile client ${socket.id} tried to select non-existent agent: ${agentId}`);
+          
+          // Agent seçimi başarısız olduğunu bildir
+          socket.emit('agent-selected', {
+            success: false,
+            error: 'Selected agent not found or not connected'
+          });
+        }
+      });
+      
       socket.on('watch-register', async (registerData) => {
         const registerKey = `${registerData.analyzerId}-${registerData.address}`;
         
         const isFirstWatcher = await redisService.addWatch(socket.id, registerKey);
         
         if (isFirstWatcher && connectedAgents.size > 0) {
-          const agent = Array.from(connectedAgents)[0];
-          agent.emit('watch-register-mobile', registerData);
-          logger.debug(`Watch request forwarded: ${registerKey}`);
+          // Eğer seçili bir agent varsa ona gönder, yoksa ilk agent'a gönder
+          let targetAgent;
+          
+          if (selectedAgentId) {
+            targetAgent = Array.from(connectedAgents).find(agent => agent.id === selectedAgentId);
+          }
+          
+          if (!targetAgent) {
+            targetAgent = Array.from(connectedAgents)[0];
+          }
+          
+          targetAgent.emit('watch-register-mobile', registerData);
+          logger.debug(`Watch request forwarded to agent ${targetAgent.id}: ${registerKey}`);
         }
       });
       
@@ -844,9 +956,19 @@ async function startWorker() {
         const noMoreWatchers = await redisService.removeWatch(socket.id, registerKey);
         
         if (noMoreWatchers && connectedAgents.size > 0) {
-          const agent = Array.from(connectedAgents)[0];
-          agent.emit('unwatch-register-mobile', registerData);
-          logger.debug(`Unwatch complete: ${registerKey}`);
+          // Eğer seçili bir agent varsa ona gönder, yoksa ilk agent'a gönder
+          let targetAgent;
+          
+          if (selectedAgentId) {
+            targetAgent = Array.from(connectedAgents).find(agent => agent.id === selectedAgentId);
+          }
+          
+          if (!targetAgent) {
+            targetAgent = Array.from(connectedAgents)[0];
+          }
+          
+          targetAgent.emit('unwatch-register-mobile', registerData);
+          logger.debug(`Unwatch complete to agent ${targetAgent.id}: ${registerKey}`);
         }
       });
       
@@ -858,19 +980,32 @@ async function startWorker() {
         const removedRegisters = await redisService.removeClient(socket.id);
         
         if (removedRegisters.length > 0 && connectedAgents.size > 0) {
-          const agent = Array.from(connectedAgents)[0];
+          // Eğer seçili bir agent varsa ona gönder, yoksa ilk agent'a gönder
+          let targetAgent;
+          
+          if (selectedAgentId) {
+            targetAgent = Array.from(connectedAgents).find(agent => agent.id === selectedAgentId);
+          }
+          
+          if (!targetAgent) {
+            targetAgent = Array.from(connectedAgents)[0];
+          }
+          
           for (const registerKey of removedRegisters) {
             const [analyzerId, address] = registerKey.split('-');
-            agent.emit('unwatch-register-mobile', {
+            targetAgent.emit('unwatch-register-mobile', {
               analyzerId,
               address: parseInt(address)
             });
-            logger.debug(`Unwatch notification sent: ${registerKey}`);
+            logger.debug(`Unwatch notification sent to agent ${targetAgent.id}: ${registerKey}`);
           }
         }
         
         // Mobile istemci listesinden temizle
         await redisService.client.del(`mobile:${socket.id}`);
+        
+        // Seçili agent bilgisini temizle
+        selectedAgentId = null;
       });
       
     } else {
@@ -891,6 +1026,20 @@ async function startWorker() {
       socket.on('identify', async (data) => {
         logger.info('Agent identified:', data);
         socket.agentInfo = data;
+        
+        // Eğer agent ismi belirtilmişse kaydet
+        if (data && data.agentName) {
+          const agentName = data.agentName;
+          agentNames.set(socket.id, agentName);
+          logger.info(`Agent name registered: ${socket.id} => ${agentName}`);
+        } else {
+          // İsim yoksa default bir isim ata
+          const defaultName = `Agent-${socket.id.substring(0, 6)}`;
+          agentNames.set(socket.id, defaultName);
+          logger.info(`No agent name provided, using default: ${defaultName}`);
+        }
+        
+        // Name ataması zaten yukarıda yapıldı
         
         // Agent bağlandığında mevcut tüm watch'ları agent'a bildir
         try {
