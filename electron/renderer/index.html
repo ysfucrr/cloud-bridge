@@ -72,18 +72,6 @@
                             Server Durdur
                         </button>
                     </div>
-                    
-                    <h3>Redis Kontrolü</h3>
-                    <div class="control-buttons">
-                        <button id="start-redis-btn" class="btn btn-info">
-                            <i class="fas fa-play"></i>
-                            Redis Başlat
-                        </button>
-                        <button id="stop-redis-btn" class="btn btn-warning" disabled>
-                            <i class="fas fa-stop"></i>
-                            Redis Durdur
-                        </button>
-                    </div>
                 </div>
             </aside>
 
@@ -211,6 +199,8 @@
                                             <tr>
                                                 <th>ID</th>
                                                 <th>Agent Adı</th>
+                                                <th>IP Adresi</th>
+                                                <th>Platform</th>
                                                 <th>Bağlantı Zamanı</th>
                                                 <th>Uptime</th>
                                                 <th>Transport</th>
@@ -219,7 +209,7 @@
                                         </thead>
                                         <tbody>
                                             <tr class="no-data">
-                                                <td colspan="6">Bağlı agent bulunamadı</td>
+                                                <td colspan="8">Bağlı agent bulunamadı</td>
                                             </tr>
                                         </tbody>
                                     </table>
@@ -240,14 +230,18 @@
                                         <thead>
                                             <tr>
                                                 <th>Client ID</th>
+                                                <th>IP Adresi</th>
+                                                <th>Platform</th>
+                                                <th>Model</th>
+                                                <th>App Version</th>
+                                                <th>OS Version</th>
                                                 <th>Bağlantı Zamanı</th>
-                                                <th>İzlenen Register'lar</th>
                                                 <th>Durum</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             <tr class="no-data">
-                                                <td colspan="4">Bağlı mobile client bulunamadı</td>
+                                                <td colspan="8">Bağlı mobile client bulunamadı</td>
                                             </tr>
                                         </tbody>
                                     </table>
@@ -343,12 +337,12 @@
                                     </div>
                                     <div class="form-group">
                                         <label>
-                                            <input type="checkbox" id="auto-start-redis"> Redis'i otomatik başlat
+                                            <input type="checkbox" id="auto-start-windows"> Windows başlangıcında uygulamayı çalıştır
                                         </label>
                                     </div>
                                     <div class="form-group">
                                         <label>
-                                            <input type="checkbox" id="auto-start-server"> Server'ı otomatik başlat
+                                            <input type="checkbox" id="auto-start-server"> Uygulama açıldığında server'ı otomatik başlat
                                         </label>
                                     </div>
                                     
@@ -395,22 +389,28 @@
                                             
                                             <div id="cloudflare-ssl-config" class="ssl-option" style="display: none;">
                                                 <div class="form-group">
-                                                    <label>Cloudflare Origin Certificate:</label>
-                                                    <textarea id="cloudflare-cert" rows="8" placeholder="-----BEGIN CERTIFICATE-----
-...
------END CERTIFICATE-----"></textarea>
+                                                    <label>Cloudflare Origin Certificate Dosyası:</label>
+                                                    <div class="file-input-group">
+                                                        <input type="text" id="cloudflare-cert-path" readonly placeholder="Certificate dosyasını seçin...">
+                                                        <button type="button" class="btn btn-secondary" onclick="selectCloudflareFile('cert')">
+                                                            <i class="fas fa-file"></i> Seç
+                                                        </button>
+                                                    </div>
                                                 </div>
                                                 
                                                 <div class="form-group">
-                                                    <label>Cloudflare Origin Private Key:</label>
-                                                    <textarea id="cloudflare-key" rows="8" placeholder="-----BEGIN PRIVATE KEY-----
-...
------END PRIVATE KEY-----"></textarea>
+                                                    <label>Cloudflare Origin Private Key Dosyası:</label>
+                                                    <div class="file-input-group">
+                                                        <input type="text" id="cloudflare-key-path" readonly placeholder="Private key dosyasını seçin...">
+                                                        <button type="button" class="btn btn-secondary" onclick="selectCloudflareFile('key')">
+                                                            <i class="fas fa-key"></i> Seç
+                                                        </button>
+                                                    </div>
                                                 </div>
                                                 
                                                 <div class="info-box">
                                                     <i class="fas fa-info-circle"></i>
-                                                    <p>Cloudflare Origin Certificate'ı Cloudflare Dashboard > SSL/TLS > Origin Server bölümünden oluşturabilirsiniz.</p>
+                                                    <p>Cloudflare Origin Certificate'ı Cloudflare Dashboard > SSL/TLS > Origin Server bölümünden oluşturup .pem dosyası olarak kaydedin.</p>
                                                 </div>
                                             </div>
                                         </div>

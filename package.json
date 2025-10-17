@@ -100,11 +100,6 @@
         "from": "redis",
         "to": "redis",
         "filter": ["**/*"]
-      },
-      {
-        "from": "Certificates",
-        "to": "Certificates",
-        "filter": ["**/*"]
       }
     ],
     "win": {

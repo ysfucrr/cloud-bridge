@@ -167,6 +167,60 @@ class RedisService {
     return await this.client.smembers(`register:${registerKey}:watchers`);
   }
 
+  // Mobile client management
+  async addMobileClient(socketId, clientInfo = {}) {
+    const clientData = {
+      socketId,
+      connectedAt: Date.now(),
+      lastPing: Date.now(),
+      ...clientInfo
+    };
+    
+    await this.client.hset('mobile-clients', socketId, JSON.stringify(clientData));
+    await this.client.sadd('mobile-client:ids', socketId);
+    
+    logger.info(`Mobile client registered: ${socketId} from ${clientInfo.ip} (${clientInfo.platform})`);
+  }
+  
+  async removeMobileClient(socketId) {
+    const removed = await this.client.hdel('mobile-clients', socketId);
+    const removedFromSet = await this.client.srem('mobile-client:ids', socketId);
+    
+    if (removed || removedFromSet) {
+      logger.info(`Mobile client removed: ${socketId}`);
+    }
+    
+    return removed || removedFromSet;
+  }
+  
+  async getMobileClients() {
+    const clientIds = await this.client.smembers('mobile-client:ids');
+    const clients = [];
+    
+    if (clientIds.length > 0) {
+      const pipeline = this.client.pipeline();
+      
+      for (const id of clientIds) {
+        pipeline.hget('mobile-clients', id);
+      }
+      
+      const results = await pipeline.exec();
+      
+      for (let i = 0; i < results.length; i++) {
+        const [err, data] = results[i];
+        if (!err && data) {
+          try {
+            clients.push(JSON.parse(data));
+          } catch (e) {
+            logger.error(`Failed to parse mobile client data for ${clientIds[i]}:`, e);
+          }
+        }
+      }
+    }
+    
+    return clients;
+  }
+
   // Agent management for cluster-wide visibility
   async addAgent(socketId, agentInfo = {}) {
     const agentData = {
@@ -390,6 +444,18 @@ class RedisService {
     
     return agents;
   }
+  
+  async getAgent(socketId) {
+    const agentData = await this.client.hget('agents', socketId);
+    if (!agentData) return null;
+    
+    try {
+      return JSON.parse(agentData);
+    } catch (e) {
+      logger.error('Failed to parse agent data:', e);
+      return null;
+    }
+  }
 
   async getFirstAgent() {
     const agentIds = await this.client.smembers('agent:ids');
@@ -417,6 +483,10 @@ class RedisService {
     // Machine ID eşleştirmelerini de temizle
     pipeline.del('machine-id:to:socket-id');
     pipeline.del('socket-id:to:machine-id');
+    
+    // Clear mobile clients
+    pipeline.del('mobile-clients');
+    pipeline.del('mobile-client:ids');
     
     // Clear all watch-related data
     // Get all keys matching watch patterns - prefix dahil

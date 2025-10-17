@@ -124,7 +124,18 @@ function createWindow() {
     
     // HTML dosyasını yükle
     console.log('HTML dosyası yükleniyor...');
-    mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+    
+    // Eğer autostart ile başlatıldıysa, renderer'a bildir
+    const args = process.argv;
+    const isAutoStart = args.includes('--autostart');
+    
+    if (isAutoStart) {
+        mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'), {
+            query: { autostart: 'true' }
+        });
+    } else {
+        mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+    }
 
     // Pencere hazır olduğunda göster
     mainWindow.once('ready-to-show', () => {
@@ -214,19 +225,6 @@ function createMenu() {
           click: () => {
             stopServer();
           }
-        },
-        { type: 'separator' },
-        {
-          label: 'Redis\'i Başlat',
-          click: () => {
-            startRedis();
-          }
-        },
-        {
-          label: 'Redis\'i Durdur',
-          click: () => {
-            stopRedis();
-          }
         }
       ]
     },
@@ -280,6 +278,15 @@ async function startRedis() {
   }
 
   try {
+    // Önce Redis'in zaten çalışıp çalışmadığını kontrol et
+    const isRedisAlreadyRunning = await checkRedisRunning();
+    if (isRedisAlreadyRunning) {
+      console.log('Redis zaten başka bir process tarafından çalıştırılıyor');
+      isRedisRunning = true;
+      mainWindow?.webContents.send('redis-status', { running: true });
+      return;
+    }
+
     // Windows için redis-server.exe'yi kontrol et
     if (process.platform === 'win32') {
       if (!fs.existsSync(APP_CONFIG.redisPath)) {
@@ -305,6 +312,14 @@ async function startRedis() {
     redisProcess.stderr.on('data', (data) => {
       console.error(`Redis Error: ${data}`);
       mainWindow?.webContents.send('redis-error', data.toString());
+      
+      // Port çakışması hatası kontrolü
+      if (data.toString().includes('bind: No such file or directory') ||
+          data.toString().includes('Could not create server TCP listening socket')) {
+        console.log('Redis port çakışması tespit edildi');
+        isRedisRunning = true; // Başka bir Redis instance çalışıyor
+        mainWindow?.webContents.send('redis-status', { running: true });
+      }
     });
 
     redisProcess.on('close', (code) => {
@@ -315,15 +330,48 @@ async function startRedis() {
 
     // Redis'in başlamasını bekle
     setTimeout(() => {
-      isRedisRunning = true;
-      mainWindow?.webContents.send('redis-status', { running: true });
-      console.log('Redis başlatıldı');
+      if (redisProcess && !redisProcess.killed) {
+        isRedisRunning = true;
+        mainWindow?.webContents.send('redis-status', { running: true });
+        console.log('Redis başlatıldı');
+      }
     }, 2000);
 
   } catch (error) {
     console.error('Redis başlatma hatası:', error);
     mainWindow?.webContents.send('redis-error', error.message);
   }
+}
+
+// Redis'in çalışıp çalışmadığını kontrol et
+async function checkRedisRunning() {
+  return new Promise((resolve) => {
+    const testClient = spawn('redis-cli', ['ping'], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    
+    testClient.stdout.on('data', (data) => {
+      if (data.toString().trim() === 'PONG') {
+        resolve(true);
+      }
+    });
+    
+    testClient.on('error', () => {
+      resolve(false);
+    });
+    
+    testClient.on('close', (code) => {
+      if (code !== 0) {
+        resolve(false);
+      }
+    });
+    
+    // Timeout
+    setTimeout(() => {
+      testClient.kill();
+      resolve(false);
+    }, 1000);
+  });
 }
 
 // Redis server'ı durdur
@@ -345,7 +393,17 @@ async function startServer() {
   }
 
   try {
-    // Önce Redis'in çalıştığından emin ol
+    // Önce server'ın zaten çalışıp çalışmadığını kontrol et
+    const serverHealth = await checkServerHealth();
+    if (serverHealth) {
+      console.log('Server zaten başka bir process tarafından çalıştırılıyor');
+      isServerRunning = true;
+      mainWindow?.webContents.send('server-status', { running: true });
+      mainWindow?.webContents.send('server-log', 'Server zaten çalışıyor durumda');
+      return;
+    }
+
+    // Önce Redis'i başlat
     if (!isRedisRunning) {
       await startRedis();
       // Redis'in başlamasını bekle
@@ -369,28 +427,65 @@ async function startServer() {
       }
     });
 
+    let serverStarted = false;
+
     serverProcess.stdout.on('data', (data) => {
       console.log(`Server: ${data}`);
       mainWindow?.webContents.send('server-log', data.toString());
+      
+      // Server başarıyla başladığını tespit et
+      if (data.toString().includes('Cloud Bridge Server ready on HTTPS port')) {
+        serverStarted = true;
+        isServerRunning = true;
+        mainWindow?.webContents.send('server-status', { running: true });
+        console.log('SCADA Server başarıyla başlatıldı');
+      }
     });
 
     serverProcess.stderr.on('data', (data) => {
       console.error(`Server Error: ${data}`);
       mainWindow?.webContents.send('server-error', data.toString());
+      
+      // Port çakışması hatası kontrolü
+      if (data.toString().includes('EADDRINUSE') ||
+          data.toString().includes('address already in use')) {
+        console.log('Server port çakışması tespit edildi');
+        isServerRunning = true; // Başka bir server instance çalışıyor
+        mainWindow?.webContents.send('server-status', { running: true });
+        mainWindow?.webContents.send('server-log', 'Server zaten çalışıyor (port kullanımda)');
+        
+        // Process'i temizle
+        if (serverProcess) {
+          serverProcess.kill();
+          serverProcess = null;
+        }
+      }
     });
 
     serverProcess.on('close', (code) => {
       console.log(`Server process exited with code ${code}`);
-      isServerRunning = false;
-      mainWindow?.webContents.send('server-status', { running: false, code });
+      
+      // Eğer server başarıyla başlamadıysa
+      if (!serverStarted) {
+        isServerRunning = false;
+        mainWindow?.webContents.send('server-status', { running: false, code });
+      }
+      
+      // Server kapandığında Redis'i de durdur (sadece normal kapanmalarda)
+      if (code !== null && code !== 0 && isRedisRunning) {
+        stopRedis();
+      }
     });
 
-    // Server'ın başlamasını bekle
+    // Server'ın başlamasını bekle (timeout ile)
     setTimeout(() => {
-      isServerRunning = true;
-      mainWindow?.webContents.send('server-status', { running: true });
-      console.log('SCADA Server başlatıldı');
-    }, 5000);
+      if (!serverStarted && serverProcess && !serverProcess.killed) {
+        // Hala başlamadıysa, varsayılan olarak başarılı say
+        isServerRunning = true;
+        mainWindow?.webContents.send('server-status', { running: true });
+        console.log('SCADA Server başlatıldı (timeout)');
+      }
+    }, 10000); // 10 saniye bekle
 
   } catch (error) {
     console.error('Server başlatma hatası:', error);
@@ -406,6 +501,11 @@ function stopServer() {
     isServerRunning = false;
     mainWindow?.webContents.send('server-status', { running: false });
     console.log('SCADA Server durduruldu');
+    
+    // Server durdurulduğunda Redis'i de durdur
+    if (isRedisRunning) {
+      stopRedis();
+    }
   }
 }
 
@@ -441,15 +541,14 @@ async function getDiagnosticInfo() {
 
 // SSL Sertifika yönetimi
 async function saveSSLSettings(settings) {
-  // Kullanıcı verisi için uygun yolu belirle
+  // SSL ayarlarını her zaman app.asar.unpacked içinde tut
   let settingsPath;
   
   if (app.isPackaged) {
-    // Paketlenmiş uygulamada userData klasörünü kullan
-    const userDataPath = app.getPath('userData');
-    settingsPath = path.join(userDataPath, 'ssl-settings.json');
+    // Paketlenmiş uygulamada app.asar.unpacked klasörünü kullan
+    settingsPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'ssl-settings.json');
   } else {
-    // Development modunda proje klasöründe
+    // Development modunda proje kök klasöründe
     settingsPath = path.join(__dirname, '..', 'ssl-settings.json');
   }
   
@@ -461,152 +560,51 @@ async function saveSSLSettings(settings) {
     }
     
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    console.log(`SSL ayarları kaydedildi: ${settingsPath}`);
     return { success: true, path: settingsPath };
   } catch (error) {
+    console.error('SSL ayarları kaydetme hatası:', error);
     return { success: false, error: error.message };
   }
 }
 
-// Sertifika dosyalarını uygulama klasörüne kopyala
-async function copyCertificatesToApp(sourcePath, keyFile, certFile, caFile) {
-  try {
-    // Uygulama içindeki Certificates klasörünü belirle - Server'ın aradığı kesin konum
-    let targetCertificatesPath;
-    
-    if (app.isPackaged) {
-      // Paketlenmiş uygulamada, server'ın sertifikaları aradığı kesin konum: resources\app.asar.unpacked\Certificates
-      targetCertificatesPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'Certificates');
-      console.log('Sertifikalar şu konuma kopyalanacak:', targetCertificatesPath);
-    } else {
-      // Development modunda proje klasöründe
-      targetCertificatesPath = path.join(__dirname, '..', 'Certificates');
-    }
-    
-    const copiedFiles = [];
-    
-    // Hedef klasörü oluştur
-    if (!fs.existsSync(targetCertificatesPath)) {
-      fs.mkdirSync(targetCertificatesPath, { recursive: true });
-    }
-    
-    // Key dosyasını kopyala
-    if (keyFile) {
-      const sourceKeyPath = path.join(sourcePath, keyFile);
-      const targetKeyPath = path.join(targetCertificatesPath, keyFile);
-      
-      if (fs.existsSync(sourceKeyPath)) {
-        fs.copyFileSync(sourceKeyPath, targetKeyPath);
-        copiedFiles.push({ type: 'key', file: keyFile, target: targetKeyPath });
-      }
-    }
-    
-    // Cert dosyasını kopyala
-    if (certFile) {
-      const sourceCertPath = path.join(sourcePath, certFile);
-      const targetCertPath = path.join(targetCertificatesPath, certFile);
-      
-      if (fs.existsSync(sourceCertPath)) {
-        fs.copyFileSync(sourceCertPath, targetCertPath);
-        copiedFiles.push({ type: 'cert', file: certFile, target: targetCertPath });
-      }
-    }
-    
-    // CA dosyasını kopyala (opsiyonel)
-    if (caFile) {
-      const sourceCaPath = path.join(sourcePath, caFile);
-      const targetCaPath = path.join(targetCertificatesPath, caFile);
-      
-      if (fs.existsSync(sourceCaPath)) {
-        fs.copyFileSync(sourceCaPath, targetCaPath);
-        copiedFiles.push({ type: 'ca', file: caFile, target: targetCaPath });
-      }
-    }
-    
-    return {
-      success: true,
-      targetPath: targetCertificatesPath,
-      copiedFiles
-    };
-    
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-}
+// Artık sertifika kopyalama fonksiyonuna gerek yok
+// Sertifikalar kullanıcının seçtiği yoldan doğrudan okunacak
 
 async function loadSSLSettings() {
-  // Kullanıcı verisi için uygun yolu belirle
+  // SSL ayarlarını her zaman app.asar.unpacked içinden oku
   let settingsPath;
   
   if (app.isPackaged) {
-    // Paketlenmiş uygulamada userData klasörünü kullan
-    const userDataPath = app.getPath('userData');
-    settingsPath = path.join(userDataPath, 'ssl-settings.json');
+    // Paketlenmiş uygulamada app.asar.unpacked klasörünü kullan
+    settingsPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'ssl-settings.json');
   } else {
-    // Development modunda proje klasöründe
+    // Development modunda proje kök klasöründe
     settingsPath = path.join(__dirname, '..', 'ssl-settings.json');
   }
   
   try {
     if (fs.existsSync(settingsPath)) {
       const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+      console.log(`SSL ayarları yüklendi: ${settingsPath}`);
       return { success: true, settings, path: settingsPath };
     } else {
-      // Varsayılan ayarlar - mevcut Certificates klasörünü kontrol et
-      let defaultCertPath;
-      
-      if (app.isPackaged) {
-        // Server'ın sertifikaları aradığı kesin konum
-        defaultCertPath = path.join(process.resourcesPath, 'app.asar.unpacked', 'Certificates');
-      } else {
-        defaultCertPath = path.join(__dirname, '..', 'Certificates');
-      }
-      
-      let defaultSettings = {
+      // Varsayılan ayarlar - boş değerlerle başla
+      const defaultSettings = {
         type: 'local',
-        certificatePath: defaultCertPath,
+        certificatePath: '',
         keyFile: '',
         certFile: '',
         caFile: '',
-        cloudflareOriginCert: null,
-        cloudflareOriginKey: null
+        cloudflareOriginCertPath: null,
+        cloudflareOriginKeyPath: null
       };
       
-      // Eğer Certificates klasörü varsa, içindeki dosyaları otomatik tespit et
-      if (fs.existsSync(defaultCertPath)) {
-        try {
-          const files = fs.readdirSync(defaultCertPath);
-          const sslFiles = files.filter(file =>
-            file.endsWith('.pem') || file.endsWith('.crt') || file.endsWith('.key') || file.endsWith('.cert')
-          );
-          
-          // Dosyaları otomatik eşleştir
-          const keyFile = sslFiles.find(f => f.toLowerCase().includes('key')) || '';
-          const certFile = sslFiles.find(f =>
-            (f.toLowerCase().includes('cert') || f.toLowerCase().includes('crt')) &&
-            !f.toLowerCase().includes('chain') &&
-            !f.toLowerCase().includes('ca')
-          ) || '';
-          const caFile = sslFiles.find(f =>
-            f.toLowerCase().includes('chain') ||
-            f.toLowerCase().includes('ca') ||
-            f.toLowerCase().includes('intermediate')
-          ) || '';
-          
-          defaultSettings.keyFile = keyFile;
-          defaultSettings.certFile = certFile;
-          defaultSettings.caFile = caFile;
-          
-        } catch (error) {
-          console.log('Certificates klasörü okunamadı:', error.message);
-        }
-      }
-      
+      console.log(`SSL ayarları dosyası bulunamadı, varsayılan ayarlar kullanılıyor: ${settingsPath}`);
       return { success: true, settings: defaultSettings, path: settingsPath };
     }
   } catch (error) {
+    console.error('SSL ayarları yükleme hatası:', error);
     return { success: false, error: error.message };
   }
 }
@@ -683,6 +681,8 @@ ipcMain.handle('get-server-status', () => ({ running: isServerRunning }));
 ipcMain.handle('get-redis-status', () => ({ running: isRedisRunning }));
 ipcMain.handle('get-server-health', checkServerHealth);
 ipcMain.handle('get-diagnostic-info', getDiagnosticInfo);
+ipcMain.handle('set-auto-start', async (event, enable) => setAutoStart(enable));
+ipcMain.handle('check-auto-start', checkAutoStart);
 
 // SSL Sertifika IPC handlers
 ipcMain.handle('save-ssl-settings', async (event, settings) => saveSSLSettings(settings));
@@ -731,8 +731,81 @@ function checkServerEnvironment() {
   }
 }
 
+// Windows başlangıcına ekleme/kaldırma fonksiyonları
+async function setAutoStart(enable) {
+  if (process.platform !== 'win32') {
+    console.log('Otomatik başlatma sadece Windows\'ta desteklenir');
+    return false;
+  }
+
+  try {
+    const appPath = app.getPath('exe');
+    const appName = 'SCADA Cloud Bridge Server';
+    
+    if (enable) {
+      // Registry'ye ekle
+      const command = `reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${appName}" /t REG_SZ /d "\\"${appPath}\\" --autostart" /f`;
+      await new Promise((resolve, reject) => {
+        exec(command, (error, stdout, stderr) => {
+          if (error) {
+            console.error('Registry ekleme hatası:', error);
+            reject(error);
+          } else {
+            console.log('Uygulama Windows başlangıcına eklendi');
+            resolve(stdout);
+          }
+        });
+      });
+      return true;
+    } else {
+      // Registry'den kaldır
+      const command = `reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${appName}" /f`;
+      await new Promise((resolve, reject) => {
+        exec(command, (error, stdout, stderr) => {
+          if (error && !error.message.includes('unable to find')) {
+            console.error('Registry silme hatası:', error);
+            reject(error);
+          } else {
+            console.log('Uygulama Windows başlangıcından kaldırıldı');
+            resolve(stdout);
+          }
+        });
+      });
+      return true;
+    }
+  } catch (error) {
+    console.error('Otomatik başlatma ayarı hatası:', error);
+    return false;
+  }
+}
+
+// Otomatik başlatma durumunu kontrol et
+async function checkAutoStart() {
+  if (process.platform !== 'win32') {
+    return false;
+  }
+
+  try {
+    const appName = 'SCADA Cloud Bridge Server';
+    const command = `reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${appName}"`;
+    
+    return new Promise((resolve) => {
+      exec(command, (error, stdout, stderr) => {
+        if (error) {
+          resolve(false);
+        } else {
+          resolve(true);
+        }
+      });
+    });
+  } catch (error) {
+    console.error('Otomatik başlatma kontrolü hatası:', error);
+    return false;
+  }
+}
+
 // Uygulama event handlers
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   try {
     console.log('Uygulama başlatılıyor...');
     console.log('Çalışma dizini:', process.cwd());
@@ -750,6 +823,49 @@ app.whenReady().then(() => {
     createMenu();
     
     console.log('Uygulama başlatıldı');
+    
+    // Komut satırı parametrelerini kontrol et
+    const args = process.argv;
+    const isAutoStart = args.includes('--autostart');
+    
+    if (isAutoStart) {
+      console.log('Windows başlangıcından otomatik başlatma tespit edildi');
+      
+      // Pencere tamamen yüklendikten sonra server'ı başlat
+      mainWindow.webContents.once('did-finish-load', () => {
+        setTimeout(async () => {
+          try {
+            // SSL kontrolü yap
+            const sslResult = await loadSSLSettings();
+            if (sslResult.success && sslResult.settings) {
+              const ssl = sslResult.settings;
+              let hasValidSSL = false;
+              
+              if (ssl.type === 'local') {
+                hasValidSSL = ssl.certificatePath && ssl.certificatePath.trim() !== '' &&
+                             ssl.keyFile && ssl.keyFile.trim() !== '' &&
+                             ssl.certFile && ssl.certFile.trim() !== '';
+              } else if (ssl.type === 'cloudflare') {
+                hasValidSSL = ssl.cloudflareOriginCertPath && ssl.cloudflareOriginCertPath.trim() !== '' &&
+                             ssl.cloudflareOriginKeyPath && ssl.cloudflareOriginKeyPath.trim() !== '';
+              }
+              
+              if (hasValidSSL) {
+                console.log('SSL sertifikası mevcut, server başlatılıyor...');
+                await startServer();
+                mainWindow?.webContents.send('server-log', 'Server otomatik olarak başlatıldı (Windows başlangıcı)');
+              } else {
+                console.log('SSL sertifikası eksik, server başlatılmıyor');
+                mainWindow?.webContents.send('server-log', 'SSL sertifikası eksik, otomatik başlatma iptal edildi');
+              }
+            }
+          } catch (error) {
+            console.error('Otomatik server başlatma hatası:', error);
+            mainWindow?.webContents.send('server-error', `Otomatik başlatma hatası: ${error.message}`);
+          }
+        }, 3000); // 3 saniye bekle
+      });
+    }
     
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -799,6 +915,36 @@ app.on('web-contents-created', (event, contents) => {
   });
 });
 
-// SSL Sertifika kopyalama IPC handler'ı ekle
-ipcMain.handle('copy-certificates-to-app', async (event, sourcePath, keyFile, certFile, caFile) => 
-  copyCertificatesToApp(sourcePath, keyFile, certFile, caFile));
+// SSL sertifika kopyalama handler'ı kaldırıldı - artık gerek yok
+
+// Tek dosya seçimi için IPC handler
+ipcMain.handle('select-file', async (event, options) => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: options.title || 'Dosya Seç',
+      filters: options.filters || [{ name: 'All Files', extensions: ['*'] }],
+      properties: ['openFile']
+    });
+    
+    if (!result.canceled && result.filePaths.length > 0) {
+      return {
+        success: true,
+        canceled: false,
+        path: result.filePaths[0]
+      };
+    }
+    
+    return { success: true, canceled: true };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
+// Dosya varlığı kontrolü için IPC handler
+ipcMain.handle('check-file-exists', async (event, filePath) => {
+  try {
+    return fs.existsSync(filePath);
+  } catch (error) {
+    return false;
+  }
+});

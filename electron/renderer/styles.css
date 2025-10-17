@@ -374,6 +374,7 @@ body {
     padding: 12px;
     text-align: left;
     border-bottom: 1px solid #dee2e6;
+    white-space: nowrap;
 }
 
 .data-table th {
@@ -383,16 +384,99 @@ body {
     text-transform: uppercase;
     font-size: 12px;
     letter-spacing: 1px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
 }
 
 .data-table tr:hover {
     background: #f8f9fa;
 }
 
+.data-table td {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.data-table td[title] {
+    cursor: help;
+}
+
+/* Platform Icons in Tables */
+.data-table .fab,
+.data-table .fas {
+    margin-right: 5px;
+}
+
+/* IP Address Column */
+.data-table td:nth-child(3) {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 13px;
+}
+
+/* Status Badges in Tables */
+.data-table .status-online,
+.data-table .status-offline {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.data-table .status-online {
+    background: #d4edda;
+    color: #155724;
+}
+
+.data-table .status-offline {
+    background: #f8d7da;
+    color: #721c24;
+}
+
 .no-data {
     text-align: center;
     color: #6c757d;
     font-style: italic;
+}
+
+/* Connections Table Specific */
+#agents-table th:nth-child(1),
+#agents-table td:nth-child(1) {
+    width: 100px;
+}
+
+#agents-table th:nth-child(2),
+#agents-table td:nth-child(2) {
+    min-width: 150px;
+}
+
+#clients-table th:nth-child(1),
+#clients-table td:nth-child(1) {
+    width: 120px;
+}
+
+#clients-table th:nth-child(3),
+#clients-table td:nth-child(3) {
+    width: 100px;
+}
+
+/* Mobile Platform Colors */
+.platform-android {
+    color: #3DDC84;
+}
+
+.platform-ios {
+    color: #000;
+}
+
+.platform-windows {
+    color: #0078D4;
+}
+
+.platform-linux {
+    color: #FCC624;
 }
 
 /* Monitoring */
@@ -586,6 +670,38 @@ body {
         flex-direction: column;
         gap: 20px;
     }
+    
+    /* Table responsive */
+    .data-table {
+        font-size: 12px;
+    }
+    
+    .data-table th,
+    .data-table td {
+        padding: 8px;
+    }
+    
+    /* Hide some columns on mobile */
+    #agents-table th:nth-child(4),
+    #agents-table td:nth-child(4),
+    #clients-table th:nth-child(5),
+    #clients-table td:nth-child(5),
+    #clients-table th:nth-child(6),
+    #clients-table td:nth-child(6) {
+        display: none;
+    }
+}
+
+@media (max-width: 1200px) {
+    /* Adjust table font size for medium screens */
+    .data-table {
+        font-size: 13px;
+    }
+    
+    .data-table th,
+    .data-table td {
+        padding: 10px;
+    }
 }
 
 /* Scrollbar Styling */
@@ -621,6 +737,18 @@ body {
     0% { transform: scale(1); }
     50% { transform: scale(1.05); }
     100% { transform: scale(1); }
+}
+
+@keyframes pulse-warning {
+    0% {
+        box-shadow: 0 0 0 0 rgba(231, 76, 60, 0.7);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(231, 76, 60, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(231, 76, 60, 0);
+    }
 }
 
 .status-dot.online {

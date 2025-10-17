@@ -273,50 +273,33 @@ async function startWorker() {
 
   // SSL sertifikalarını dinamik olarak yükle
   function loadSSLCertificates() {
-    // Paketlenmiş uygulamada ssl-settings.json dosyasını userData klasöründe ara
+    // SSL ayarları dosyasının yolunu belirle
     let settingsPath;
-    let defaultCertPath;
     
-    // Electron uygulaması içinde mi kontrol et
-    const isElectronApp = process.env.ELECTRON_RUN_AS_NODE || process.versions.electron;
-    
-    if (isElectronApp) {
-      // Electron uygulaması
-      if (__dirname.includes('app.asar.unpacked')) {
-        // Paketlenmiş uygulamada, sertifikaları doğrudan app.asar.unpacked içindeki Certificates klasöründen oku
-        defaultCertPath = path.join(__dirname, 'Certificates');
-        logger.info(`Sertifika yolu (paketlenmiş): ${defaultCertPath}`);
-      } else {
-        // Geliştirme ortamı
-        defaultCertPath = path.join(__dirname, '..', 'Certificates');
-        logger.info(`Sertifika yolu (geliştirme): ${defaultCertPath}`);
-      }
-      
-      // SSL ayarları için userData klasörünü kullan (Windows)
-      const userDataPath = process.env.APPDATA
-        ? path.join(process.env.APPDATA, 'SCADA Cloud Bridge Server')
-        : path.join(__dirname, '..');
-      settingsPath = path.join(userDataPath, 'ssl-settings.json');
-      
-      logger.info('Electron SSL yolları:', {
-        dirname: __dirname,
-        certificates: defaultCertPath,
-        settings: settingsPath
-      });
+    // Paketlenmiş Electron uygulaması içinde mi kontrol et
+    if (__dirname.includes('app.asar.unpacked')) {
+      // Paketlenmiş uygulamada, ssl-settings.json dosyası app.asar.unpacked içinde
+      settingsPath = path.join(__dirname, 'ssl-settings.json');
+      logger.info('Paketlenmiş uygulama SSL ayarları yolu:', settingsPath);
+    } else if (process.env.ELECTRON_RUN_AS_NODE || process.versions.electron) {
+      // Development modunda Electron uygulaması
+      settingsPath = path.join(__dirname, '..', 'ssl-settings.json');
+      logger.info('Development Electron SSL ayarları yolu:', settingsPath);
     } else {
       // Standalone Node.js uygulaması
       settingsPath = path.join(__dirname, 'ssl-settings.json');
-      defaultCertPath = path.join(__dirname, 'Certificates');
+      logger.info('Standalone SSL ayarları yolu:', settingsPath);
     }
     
+    // Varsayılan SSL yapılandırması
     let sslConfig = {
       type: 'local', // 'local' veya 'cloudflare'
-      certificatePath: defaultCertPath,
-      keyFile: 'imajstone.com-key.pem',
-      certFile: 'imajstone.com-crt.pem',
-      caFile: 'imajstone.com-chain-only.pem',
-      cloudflareOriginCert: null,
-      cloudflareOriginKey: null
+      certificatePath: '', // Let's Encrypt sertifikaları için kullanıcının seçeceği yol
+      keyFile: '',
+      certFile: '',
+      caFile: '',
+      cloudflareOriginCertPath: null, // Cloudflare cert dosya yolu
+      cloudflareOriginKeyPath: null   // Cloudflare key dosya yolu
     };
 
     // Ayarlar dosyası varsa yükle
@@ -324,36 +307,73 @@ async function startWorker() {
       try {
         const savedSettings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
         sslConfig = { ...sslConfig, ...savedSettings };
-        logger.info('SSL ayarları yüklendi:', { type: sslConfig.type, path: sslConfig.certificatePath });
+        logger.info('SSL ayarları yüklendi:', {
+          type: sslConfig.type,
+          path: sslConfig.certificatePath,
+          keyFile: sslConfig.keyFile,
+          certFile: sslConfig.certFile
+        });
       } catch (error) {
-        logger.warn('SSL ayarları yüklenemedi, varsayılan ayarlar kullanılıyor:', error.message);
+        logger.error('SSL ayarları yüklenemedi:', error.message);
+        throw new Error('SSL ayarları okunamadı. Lütfen ayarları kontrol edin.');
       }
     } else {
-      logger.info('SSL ayarları bulunamadı, varsayılan ayarlar kullanılıyor:', { path: defaultCertPath });
+      logger.error('SSL ayarları dosyası bulunamadı:', settingsPath);
+      throw new Error('SSL ayarları yapılandırılmamış. Lütfen Electron uygulamasından SSL ayarlarını yapın.');
     }
 
     let httpsOptions;
 
-    if (sslConfig.type === 'cloudflare' && sslConfig.cloudflareOriginCert && sslConfig.cloudflareOriginKey) {
-      // Cloudflare Origin Certificate kullan
+    if (sslConfig.type === 'cloudflare') {
+      // Cloudflare Origin Certificate dosyalarını kullan
+      
+      // Sertifika dosya yollarının belirtildiğinden emin ol
+      if (!sslConfig.cloudflareOriginCertPath || !sslConfig.cloudflareOriginKeyPath) {
+        throw new Error('Cloudflare Origin Certificate dosya yolları eksik. Lütfen ayarları kontrol edin.');
+      }
+      
+      // Dosyaların varlığını kontrol et
+      logger.info('Cloudflare Origin Certificate dosyaları kontrol ediliyor:', {
+        certPath: sslConfig.cloudflareOriginCertPath,
+        keyPath: sslConfig.cloudflareOriginKeyPath
+      });
+      
+      if (!fs.existsSync(sslConfig.cloudflareOriginKeyPath)) {
+        throw new Error(`Cloudflare Origin key dosyası bulunamadı: ${sslConfig.cloudflareOriginKeyPath}`);
+      }
+      if (!fs.existsSync(sslConfig.cloudflareOriginCertPath)) {
+        throw new Error(`Cloudflare Origin cert dosyası bulunamadı: ${sslConfig.cloudflareOriginCertPath}`);
+      }
+      
+      // Sertifikaları dosyadan oku
       httpsOptions = {
-        key: sslConfig.cloudflareOriginKey,
-        cert: sslConfig.cloudflareOriginCert
+        key: fs.readFileSync(sslConfig.cloudflareOriginKeyPath),
+        cert: fs.readFileSync(sslConfig.cloudflareOriginCertPath)
       };
-      logger.info('Cloudflare Origin Certificate kullanılıyor');
-    } else {
+      
+      logger.info('Cloudflare Origin Certificate yüklendi:', {
+        certPath: sslConfig.cloudflareOriginCertPath,
+        keyPath: sslConfig.cloudflareOriginKeyPath
+      });
+    } else if (sslConfig.type === 'local') {
       // Yerel sertifika dosyalarını kullan
+      
+      // Sertifika yolu ve dosya adlarının belirtildiğinden emin ol
+      if (!sslConfig.certificatePath || !sslConfig.keyFile || !sslConfig.certFile) {
+        throw new Error('SSL sertifika yolu veya dosya adları eksik. Lütfen ayarları kontrol edin.');
+      }
+      
+      // Dosya yollarını oluştur - kullanıcının seçtiği yoldan oku
       const keyPath = path.join(sslConfig.certificatePath, sslConfig.keyFile);
       const certPath = path.join(sslConfig.certificatePath, sslConfig.certFile);
-      const caPath = path.join(sslConfig.certificatePath, sslConfig.caFile);
+      const caPath = sslConfig.caFile ? path.join(sslConfig.certificatePath, sslConfig.caFile) : null;
 
-      // Dosyaların varlığını kontrol et ve detaylı log tut
-      logger.info(`SSL dosya yolları kontrol ediliyor:`, {
+      // Dosyaların varlığını kontrol et
+      logger.info('SSL dosyaları kontrol ediliyor:', {
         keyPath,
         certPath,
         caPath,
-        dirname: __dirname,
-        certPathExists: fs.existsSync(sslConfig.certificatePath)
+        certificatePath: sslConfig.certificatePath
       });
 
       if (!fs.existsSync(keyPath)) {
@@ -363,18 +383,21 @@ async function startWorker() {
         throw new Error(`SSL cert dosyası bulunamadı: ${certPath}`);
       }
 
+      // Sertifikaları oku
       httpsOptions = {
         key: fs.readFileSync(keyPath),
         cert: fs.readFileSync(certPath)
       };
 
       // CA dosyası varsa ekle
-      if (fs.existsSync(caPath)) {
+      if (caPath && fs.existsSync(caPath)) {
         httpsOptions.ca = fs.readFileSync(caPath);
         logger.info('SSL sertifikaları yüklendi (CA dahil):', { keyPath, certPath, caPath });
       } else {
         logger.info('SSL sertifikaları yüklendi (CA olmadan):', { keyPath, certPath });
       }
+    } else {
+      throw new Error('Geçersiz SSL yapılandırması. Lütfen ayarları kontrol edin.');
     }
 
     return httpsOptions;
@@ -598,17 +621,25 @@ async function startWorker() {
         const agentName = agentNames.get(agent.id) || `Agent-${agent.id.substring(0, 6)}`;
         const machineId = agentMachineIds.get(agent.id) || null;
         
+        // Redis'ten detaylı agent bilgilerini al
+        const agentDetails = await redisService.getAgent(agent.id);
+        
         if (connectTime) {
           agentData.push({
             id: agent.id.substring(0, 8),
             name: agentName,
             machineId: machineId ? machineId : undefined,
+            ip: agentDetails?.ip || 'Unknown',
+            platform: agentDetails?.platform || 'Unknown',
             connectedAt: new Date(connectTime).toISOString(),
             uptime: Math.floor((Date.now() - connectTime) / 1000),
             transport: agent.conn?.transport?.name || 'unknown'
           });
         }
       }
+      
+      // Mobile client detaylarını al
+      const mobileClientDetails = await redisService.getMobileClients();
       
       res.json({
         status: 'ok',
@@ -625,9 +656,13 @@ async function startWorker() {
           agents: {
             connected: connectedCount,
             pingable: pingableCount,
-            sampleData: agentData.slice(0, 3) // Only show up to 3 samples
+            sampleData: agentData.slice(0, 3), // Only show up to 3 samples
+            fullData: agentData // Tüm agent verileri
           },
-          mobileClients,
+          mobileClients: {
+            count: mobileClients,
+            details: mobileClientDetails
+          },
           redis: {
             connected: redisConnected
           }
@@ -700,6 +735,25 @@ async function startWorker() {
       });
     } catch (error) {
       logger.error('Error in agent list endpoint:', error);
+      res.status(500).json({
+        error: 'Internal server error',
+        message: error.message
+      });
+    }
+  });
+  
+  // Mobile clients list endpoint
+  app.get('/api/mobile/clients', async (req, res) => {
+    try {
+      const mobileClients = await redisService.getMobileClients();
+      
+      res.json({
+        status: 'ok',
+        count: mobileClients.length,
+        clients: mobileClients
+      });
+    } catch (error) {
+      logger.error('Error in mobile clients endpoint:', error);
       res.status(500).json({
         error: 'Internal server error',
         message: error.message
@@ -959,11 +1013,57 @@ async function startWorker() {
     }
   });
 
+  // User-Agent parser fonksiyonu
+  function parseUserAgent(userAgent) {
+    const deviceInfo = {
+      platform: 'Unknown',
+      model: 'Unknown',
+      browser: 'Unknown'
+    };
+    
+    // Platform tespiti
+    if (/Android/i.test(userAgent)) {
+      deviceInfo.platform = 'Android';
+      // Android model tespiti
+      const androidMatch = userAgent.match(/Android[^;]*;\s*([^)]+)/);
+      if (androidMatch && androidMatch[1]) {
+        deviceInfo.model = androidMatch[1].trim();
+      }
+    } else if (/iPhone|iPad|iPod/i.test(userAgent)) {
+      deviceInfo.platform = 'iOS';
+      if (/iPhone/i.test(userAgent)) {
+        deviceInfo.model = 'iPhone';
+      } else if (/iPad/i.test(userAgent)) {
+        deviceInfo.model = 'iPad';
+      } else {
+        deviceInfo.model = 'iPod';
+      }
+    } else if (/Windows/i.test(userAgent)) {
+      deviceInfo.platform = 'Windows';
+    } else if (/Mac/i.test(userAgent)) {
+      deviceInfo.platform = 'macOS';
+    } else if (/Linux/i.test(userAgent)) {
+      deviceInfo.platform = 'Linux';
+    }
+    
+    return deviceInfo;
+  }
+
   // Socket.IO connection handling
   io.on('connection', async (socket) => {
-    const clientIp = socket.handshake.address;
+    let clientIp = socket.handshake.address || socket.request.connection.remoteAddress;
+    
+    // IPv6 formatındaki IPv4 adreslerini düzelt (::ffff: prefix'ini kaldır)
+    if (clientIp && clientIp.includes('::ffff:')) {
+      clientIp = clientIp.replace('::ffff:', '');
+    }
+    
     const protocol = 'https'; // Sadece HTTPS destekleniyor
     const port = CONFIG.HTTPS_PORT;
+    
+    // User-Agent'tan cihaz bilgilerini çıkar
+    const userAgent = socket.handshake.headers['user-agent'] || '';
+    const deviceInfo = parseUserAgent(userAgent);
     
     logger.debug(`New socket connection: ${socket.id} from ${clientIp}`);
     
@@ -973,6 +1073,35 @@ async function startWorker() {
     if (isMobileClient) {
       logger.debug(`Mobile client connected: ${socket.id}`);
       metrics.activeConnections.inc({ type: 'mobile' });
+      
+      // Mobile client bilgilerini topla - query parametrelerinden veya user-agent'tan
+      const query = socket.handshake.query;
+      
+      // Query parametrelerinden gelen bilgileri logla (debug için)
+      if (query && Object.keys(query).length > 1) { // type dışında başka parametreler varsa
+        logger.debug(`Mobile client query parameters:`, {
+          platform: query.platform,
+          model: query.model,
+          appVersion: query.appVersion,
+          osVersion: query.osVersion
+        });
+      }
+      
+      const mobileInfo = {
+        id: socket.id,
+        ip: clientIp,
+        platform: query.platform || deviceInfo.platform || 'Unknown',
+        model: query.model || deviceInfo.model || 'Unknown',
+        appVersion: query.appVersion || 'Unknown',
+        osVersion: query.osVersion || 'Unknown',
+        connectedAt: Date.now(),
+        userAgent: userAgent
+      };
+      
+      logger.info(`Mobile client connected: ${socket.id} from ${clientIp} (${mobileInfo.platform} - ${mobileInfo.model})`);
+      
+      // Redis'e mobile client bilgilerini kaydet
+      await redisService.addMobileClient(socket.id, mobileInfo);
       
       // Mobile istemciye özgü izlenen register listesini oluştur
       await redisService.client.sadd(`mobile:${socket.id}`, ''); // Boş set oluştur
@@ -1057,6 +1186,9 @@ async function startWorker() {
         logger.debug(`Mobile client disconnected: ${socket.id}`);
         metrics.activeConnections.dec({ type: 'mobile' });
         
+        // Redis'ten mobile client bilgilerini temizle
+        await redisService.removeMobileClient(socket.id);
+        
         // Clean up all watches for this client
         const removedRegisters = await redisService.removeClient(socket.id);
         
@@ -1111,6 +1243,10 @@ async function startWorker() {
         // Agent bilgileri oluştur
         const agentInfo = {
           socketId: socket.id,
+          ip: clientIp,
+          platform: deviceInfo.platform,
+          userAgent: userAgent,
+          connectedAt: Date.now(),
           ...data
         };
         

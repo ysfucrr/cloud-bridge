@@ -6,13 +6,111 @@ let diagnosticInterval = null;
 
 // DOM yüklendiğinde çalışacak fonksiyonlar
 document.addEventListener('DOMContentLoaded', () => {
-    initializeApp();
-    setupEventListeners();
-    setupElectronListeners();
-    startPeriodicUpdates();
-    loadSettings();
-    updateSystemInfo();
+    // Önce SSL sertifika kontrolü yap
+    checkSSLCertificateAndInitialize();
 });
+
+// SSL sertifika kontrolü ve uygulama başlatma
+async function checkSSLCertificateAndInitialize() {
+    showLoading('SSL sertifika kontrolü yapılıyor...');
+    
+    try {
+        // SSL ayarlarını kontrol et
+        const sslResult = await window.electronAPI.loadSSLSettings();
+        
+        if (sslResult.success && sslResult.settings) {
+            const ssl = sslResult.settings;
+            
+            // Sertifika yapılandırması var mı kontrol et
+            let hasValidSSL = false;
+            
+            if (ssl.type === 'local') {
+                // Let's Encrypt sertifikaları için kontrol - boş string kontrolü de yap
+                hasValidSSL = ssl.certificatePath && ssl.certificatePath.trim() !== '' &&
+                             ssl.keyFile && ssl.keyFile.trim() !== '' &&
+                             ssl.certFile && ssl.certFile.trim() !== '';
+            } else if (ssl.type === 'cloudflare') {
+                // Cloudflare sertifikaları için kontrol - boş string kontrolü de yap
+                hasValidSSL = ssl.cloudflareOriginCertPath && ssl.cloudflareOriginCertPath.trim() !== '' &&
+                             ssl.cloudflareOriginKeyPath && ssl.cloudflareOriginKeyPath.trim() !== '';
+            }
+            
+            if (hasValidSSL) {
+                console.log('SSL sertifika yapılandırması bulundu, uygulama başlatılıyor...');
+                hideLoading();
+                
+                // Normal uygulama başlatma
+                initializeApp();
+                setupEventListeners();
+                setupElectronListeners();
+                startPeriodicUpdates();
+                loadSettings();
+                updateSystemInfo();
+                
+                // SSL varsa ve otomatik başlatma ayarı aktifse server'ı başlat
+                setTimeout(() => {
+                    checkAutoStartServer();
+                }, 2000);
+            } else {
+                console.log('SSL sertifika yapılandırması eksik, ayarlar sayfasına yönlendiriliyor...');
+                hideLoading();
+                
+                // Minimal başlatma - sadece gerekli olanlar
+                setupEventListeners();
+                setupElectronListeners();
+                updateSystemInfo();
+                
+                // Ayarlar sayfasına yönlendir
+                showTab('settings');
+                document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+                document.querySelector('[data-tab="settings"]').classList.add('active');
+                
+                // Kullanıcıya bilgi ver
+                await window.electronAPI.showMessageBox({
+                    type: 'warning',
+                    title: 'SSL Sertifikası Gerekli',
+                    message: 'SSL Sertifikası Yapılandırılmamış',
+                    detail: 'Cloud Bridge Server\'ı başlatmak için önce SSL sertifikası yapılandırmanız gerekiyor. Lütfen ayarlar sayfasından SSL sertifikanızı seçin.'
+                });
+                
+                // SSL config bölümünü vurgula
+                const sslSection = document.querySelector('.settings-section:has(#ssl-type)');
+                if (sslSection) {
+                    sslSection.style.border = '2px solid #e74c3c';
+                    sslSection.style.animation = 'pulse-warning 2s infinite';
+                }
+                
+                // Server kontrol butonlarını devre dışı bırak
+                document.getElementById('start-server-btn').disabled = true;
+                document.getElementById('stop-server-btn').disabled = true;
+                
+                addLogEntry('SSL sertifikası yapılandırılmamış. Lütfen ayarlardan SSL sertifikası ekleyin.', 'warning');
+            }
+        } else {
+            // SSL ayarları yüklenemedi
+            throw new Error('SSL ayarları yüklenemedi');
+        }
+    } catch (error) {
+        console.error('SSL kontrol hatası:', error);
+        hideLoading();
+        
+        // Hata durumunda da ayarlar sayfasına yönlendir
+        setupEventListeners();
+        setupElectronListeners();
+        updateSystemInfo();
+        
+        showTab('settings');
+        document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+        document.querySelector('[data-tab="settings"]').classList.add('active');
+        
+        await window.electronAPI.showMessageBox({
+            type: 'error',
+            title: 'Hata',
+            message: 'SSL Ayarları Yüklenemedi',
+            detail: 'SSL ayarları kontrol edilirken bir hata oluştu. Lütfen ayarları kontrol edin.'
+        });
+    }
+}
 
 // Uygulamayı başlat
 function initializeApp() {
@@ -46,8 +144,6 @@ function setupEventListeners() {
     // Server control buttons
     document.getElementById('start-server-btn').addEventListener('click', startServer);
     document.getElementById('stop-server-btn').addEventListener('click', stopServer);
-    document.getElementById('start-redis-btn').addEventListener('click', startRedis);
-    document.getElementById('stop-redis-btn').addEventListener('click', stopRedis);
 
     // Refresh buttons
     document.getElementById('refresh-agents').addEventListener('click', refreshConnections);
@@ -143,11 +239,44 @@ function showTab(tabName) {
 
 // Server başlatma
 async function startServer() {
-    showLoading('Server başlatılıyor...');
+    // SSL sertifika kontrolü yap
+    const sslResult = await window.electronAPI.loadSSLSettings();
+    if (sslResult.success && sslResult.settings) {
+        const ssl = sslResult.settings;
+        let hasValidSSL = false;
+        
+        if (ssl.type === 'local') {
+            hasValidSSL = ssl.certificatePath && ssl.certificatePath.trim() !== '' &&
+                         ssl.keyFile && ssl.keyFile.trim() !== '' &&
+                         ssl.certFile && ssl.certFile.trim() !== '';
+        } else if (ssl.type === 'cloudflare') {
+            hasValidSSL = ssl.cloudflareOriginCertPath && ssl.cloudflareOriginCertPath.trim() !== '' &&
+                         ssl.cloudflareOriginKeyPath && ssl.cloudflareOriginKeyPath.trim() !== '';
+        }
+        
+        if (!hasValidSSL) {
+            // SSL sertifikası yoksa uyarı ver ve ayarlara yönlendir
+            await window.electronAPI.showMessageBox({
+                type: 'warning',
+                title: 'SSL Sertifikası Gerekli',
+                message: 'SSL Sertifikası Yapılandırılmamış',
+                detail: 'Server\'ı başlatmak için önce SSL sertifikası yapılandırmanız gerekiyor.'
+            });
+            
+            // Ayarlar sekmesine geç
+            showTab('settings');
+            document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+            document.querySelector('[data-tab="settings"]').classList.add('active');
+            
+            return;
+        }
+    }
+    
+    showLoading('Server ve Redis başlatılıyor...');
     
     try {
         await window.electronAPI.startServer();
-        addLogEntry('Server başlatma komutu gönderildi', 'info');
+        addLogEntry('Server ve Redis başlatma komutu gönderildi', 'info');
     } catch (error) {
         addLogEntry(`Server başlatma hatası: ${error.message}`, 'error');
         await window.electronAPI.showMessageBox({
@@ -163,47 +292,13 @@ async function startServer() {
 
 // Server durdurma
 async function stopServer() {
-    showLoading('Server durduruluyor...');
+    showLoading('Server ve Redis durduruluyor...');
     
     try {
         await window.electronAPI.stopServer();
-        addLogEntry('Server durdurma komutu gönderildi', 'info');
+        addLogEntry('Server ve Redis durdurma komutu gönderildi', 'info');
     } catch (error) {
         addLogEntry(`Server durdurma hatası: ${error.message}`, 'error');
-    } finally {
-        hideLoading();
-    }
-}
-
-// Redis başlatma
-async function startRedis() {
-    showLoading('Redis başlatılıyor...');
-    
-    try {
-        await window.electronAPI.startRedis();
-        addLogEntry('Redis başlatma komutu gönderildi', 'info');
-    } catch (error) {
-        addLogEntry(`Redis başlatma hatası: ${error.message}`, 'error');
-        await window.electronAPI.showMessageBox({
-            type: 'error',
-            title: 'Hata',
-            message: 'Redis başlatılamadı',
-            detail: error.message
-        });
-    } finally {
-        hideLoading();
-    }
-}
-
-// Redis durdurma
-async function stopRedis() {
-    showLoading('Redis durduruluyor...');
-    
-    try {
-        await window.electronAPI.stopRedis();
-        addLogEntry('Redis durdurma komutu gönderildi', 'info');
-    } catch (error) {
-        addLogEntry(`Redis durdurma hatası: ${error.message}`, 'error');
     } finally {
         hideLoading();
     }
@@ -255,21 +350,15 @@ function updateServerStatusUI(isRunning) {
 function updateRedisStatusUI(isRunning) {
     const statusDot = document.querySelector('#redis-status .status-dot');
     const statusText = document.getElementById('redis-status-text');
-    const startBtn = document.getElementById('start-redis-btn');
-    const stopBtn = document.getElementById('stop-redis-btn');
     
     if (isRunning) {
         statusDot.className = 'status-dot online';
         statusText.textContent = 'Online';
         statusText.className = 'status-online';
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
     } else {
         statusDot.className = 'status-dot offline';
         statusText.textContent = 'Offline';
         statusText.className = 'status-offline';
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
     }
 }
 
@@ -318,7 +407,14 @@ function updateServerHealthInfo(health) {
 function updateConnectionStats(diagnostic) {
     if (diagnostic.connections) {
         const agentCount = diagnostic.connections.agents?.connected || 0;
-        const mobileCount = diagnostic.connections.mobileClients || 0;
+        
+        // mobileClients bir nesne ise count değerini al, sayı ise direkt kullan
+        let mobileCount = 0;
+        if (typeof diagnostic.connections.mobileClients === 'number') {
+            mobileCount = diagnostic.connections.mobileClients;
+        } else if (diagnostic.connections.mobileClients && typeof diagnostic.connections.mobileClients === 'object') {
+            mobileCount = diagnostic.connections.mobileClients.count || diagnostic.connections.mobileClients.total || 0;
+        }
         
         document.getElementById('agent-count').textContent = agentCount;
         document.getElementById('mobile-count').textContent = mobileCount;
@@ -344,12 +440,17 @@ function updateAgentsTable(agentsData) {
     const tbody = document.querySelector('#agents-table tbody');
     tbody.innerHTML = '';
     
-    if (agentsData && agentsData.sampleData && agentsData.sampleData.length > 0) {
-        agentsData.sampleData.forEach(agent => {
+    // fullData varsa onu kullan, yoksa sampleData kullan
+    const agents = agentsData?.fullData || agentsData?.sampleData || [];
+    
+    if (agents && agents.length > 0) {
+        agents.forEach(agent => {
             const row = document.createElement('tr');
             row.innerHTML = `
-                <td>${agent.id}</td>
+                <td title="${agent.id}">${agent.id}</td>
                 <td>${agent.name || 'İsimsiz Agent'}</td>
+                <td>${agent.ip || 'Unknown'}</td>
+                <td>${agent.platform || 'Unknown'}</td>
                 <td>${new Date(agent.connectedAt).toLocaleString('tr-TR')}</td>
                 <td>${formatUptime(agent.uptime)}</td>
                 <td>${agent.transport}</td>
@@ -358,27 +459,67 @@ function updateAgentsTable(agentsData) {
             tbody.appendChild(row);
         });
     } else {
-        tbody.innerHTML = '<tr class="no-data"><td colspan="6">Bağlı agent bulunamadı</td></tr>';
+        tbody.innerHTML = '<tr class="no-data"><td colspan="8">Bağlı agent bulunamadı</td></tr>';
     }
 }
 
 // Client tablosunu güncelle
-function updateClientsTable(clientCount) {
+function updateClientsTable(clientsData) {
     const tbody = document.querySelector('#clients-table tbody');
     tbody.innerHTML = '';
     
-    if (clientCount > 0) {
-        // Gerçek client bilgileri olmadığı için genel bilgi göster
-        const row = document.createElement('tr');
-        row.innerHTML = `
-            <td>Mobile Clients</td>
-            <td>-</td>
-            <td>-</td>
-            <td><span class="status-online">${clientCount} aktif</span></td>
-        `;
-        tbody.appendChild(row);
+    // Eğer clientsData bir sayı ise (eski format), object ise yeni format
+    if (typeof clientsData === 'number') {
+        // Eski format - sadece sayı
+        if (clientsData > 0) {
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td colspan="7">Mobile Clients</td>
+                <td><span class="status-online">${clientsData} aktif</span></td>
+            `;
+            tbody.appendChild(row);
+        } else {
+            tbody.innerHTML = '<tr class="no-data"><td colspan="8">Bağlı mobile client bulunamadı</td></tr>';
+        }
+    } else if (clientsData && clientsData.details && clientsData.details.length > 0) {
+        // Yeni format - detaylı bilgiler
+        clientsData.details.forEach(client => {
+            const row = document.createElement('tr');
+            const platform = client.platform || 'Unknown';
+            const platformIcon = getPlatformIcon(platform);
+            
+            row.innerHTML = `
+                <td title="${client.id}">${client.id.substring(0, 8)}...</td>
+                <td>${client.ip || 'Unknown'}</td>
+                <td>${platformIcon} ${platform}</td>
+                <td>${client.model || 'Unknown'}</td>
+                <td>${client.appVersion || 'Unknown'}</td>
+                <td>${client.osVersion || 'Unknown'}</td>
+                <td>${new Date(client.connectedAt).toLocaleString('tr-TR')}</td>
+                <td><span class="status-online">Online</span></td>
+            `;
+            tbody.appendChild(row);
+        });
     } else {
-        tbody.innerHTML = '<tr class="no-data"><td colspan="4">Bağlı mobile client bulunamadı</td></tr>';
+        tbody.innerHTML = '<tr class="no-data"><td colspan="8">Bağlı mobile client bulunamadı</td></tr>';
+    }
+}
+
+// Platform için ikon döndür
+function getPlatformIcon(platform) {
+    const platformLower = platform.toLowerCase();
+    if (platformLower.includes('android')) {
+        return '<i class="fab fa-android" style="color: #3DDC84;"></i>';
+    } else if (platformLower.includes('ios') || platformLower.includes('iphone') || platformLower.includes('ipad')) {
+        return '<i class="fab fa-apple" style="color: #000;"></i>';
+    } else if (platformLower.includes('windows')) {
+        return '<i class="fab fa-windows" style="color: #0078D4;"></i>';
+    } else if (platformLower.includes('mac')) {
+        return '<i class="fab fa-apple" style="color: #000;"></i>';
+    } else if (platformLower.includes('linux')) {
+        return '<i class="fab fa-linux" style="color: #FCC624;"></i>';
+    } else {
+        return '<i class="fas fa-mobile-alt" style="color: #666;"></i>';
     }
 }
 
@@ -462,19 +603,129 @@ function toggleAutoScroll() {
 
 // Ayarları kaydet
 async function saveSettings() {
+    const wasSSLMissing = document.getElementById('start-server-btn').disabled;
     await saveSettingsWithSSL();
+    
+    // Eğer SSL eksikti ve şimdi eklendiyse, server kontrollerini etkinleştir
+    if (wasSSLMissing) {
+        // SSL ayarlarını tekrar kontrol et
+        const sslResult = await window.electronAPI.loadSSLSettings();
+        if (sslResult.success && sslResult.settings) {
+            const ssl = sslResult.settings;
+            let hasValidSSL = false;
+            
+            if (ssl.type === 'local') {
+                hasValidSSL = ssl.certificatePath && ssl.keyFile && ssl.certFile;
+            } else if (ssl.type === 'cloudflare') {
+                hasValidSSL = ssl.cloudflareOriginCertPath && ssl.cloudflareOriginKeyPath;
+            }
+            
+            if (hasValidSSL) {
+                // Server kontrollerini etkinleştir
+                document.getElementById('start-server-btn').disabled = false;
+                document.getElementById('stop-server-btn').disabled = true;
+                
+                // SSL vurgusunu kaldır
+                const sslSection = document.querySelector('.settings-section:has(#ssl-type)');
+                if (sslSection) {
+                    sslSection.style.border = '';
+                    sslSection.style.animation = '';
+                }
+                
+                // Tam başlatma yap
+                if (!window.periodicUpdatesStarted) {
+                    startPeriodicUpdates();
+                    window.periodicUpdatesStarted = true;
+                }
+                
+                addLogEntry('SSL sertifikası başarıyla yapılandırıldı. Server ve Redis otomatik olarak başlatılıyor...', 'success');
+                
+                // Dashboard'a dön
+                setTimeout(() => {
+                    showTab('dashboard');
+                    document.querySelectorAll('.nav-item').forEach(nav => nav.classList.remove('active'));
+                    document.querySelector('[data-tab="dashboard"]').classList.add('active');
+                }, 1500);
+                
+                // SSL yüklendikten sonra otomatik olarak server'ı başlat
+                setTimeout(() => {
+                    addLogEntry('SSL sertifikası yüklendi, server otomatik başlatılıyor...', 'info');
+                    startServer();
+                }, 2000);
+            }
+        }
+    }
+}
+
+// Windows başlangıcında otomatik başlatma ayarını güncelle
+async function updateAutoStart() {
+    const autoStartWindows = document.getElementById('auto-start-windows').checked;
+    
+    try {
+        const result = await window.electronAPI.setAutoStart(autoStartWindows);
+        if (result) {
+            addLogEntry(`Windows başlangıcında otomatik başlatma ${autoStartWindows ? 'etkinleştirildi' : 'devre dışı bırakıldı'}`, 'success');
+        } else {
+            addLogEntry('Windows başlangıcı ayarı güncellenemedi', 'error');
+        }
+    } catch (error) {
+        addLogEntry(`Otomatik başlatma ayarı hatası: ${error.message}`, 'error');
+    }
 }
 
 // Ayarları sıfırla
-function resetSettings() {
+async function resetSettings() {
+    // Form alanlarını sıfırla
     document.getElementById('https-port').value = '443';
     document.getElementById('redis-port').value = '6379';
     document.getElementById('log-level').value = 'info';
-    document.getElementById('auto-start-redis').checked = false;
+    document.getElementById('auto-start-windows').checked = false;
     document.getElementById('auto-start-server').checked = false;
     
+    // SSL ayarlarını da sıfırla
+    document.getElementById('ssl-type').value = 'local';
+    document.getElementById('certificate-path').value = '';
+    document.getElementById('key-file').value = '';
+    document.getElementById('cert-file').value = '';
+    document.getElementById('ca-file').value = '';
+    document.getElementById('cloudflare-cert-path').value = '';
+    document.getElementById('cloudflare-key-path').value = '';
+    
+    // SSL görünümünü güncelle
+    toggleSSLConfig();
+    
+    // SSL dosya listesini temizle
+    const sslFilesList = document.getElementById('ssl-files-list');
+    if (sslFilesList) {
+        sslFilesList.innerHTML = '';
+    }
+    
+    // Normal ayarları temizle
     localStorage.removeItem('scada-bridge-settings');
-    addLogEntry('Ayarlar sıfırlandı', 'info');
+    
+    // SSL ayarlarını da temizle (ssl-settings.json dosyasını sıfırla)
+    try {
+        const defaultSSLSettings = {
+            type: 'local',
+            certificatePath: '',
+            keyFile: '',
+            certFile: '',
+            caFile: '',
+            cloudflareOriginCertPath: null,
+            cloudflareOriginKeyPath: null
+        };
+        
+        const sslResult = await window.electronAPI.saveSSLSettings(defaultSSLSettings);
+        
+        if (sslResult.success) {
+            addLogEntry('Tüm ayarlar sıfırlandı (SSL ayarları dahil)', 'success');
+        } else {
+            addLogEntry('Ayarlar sıfırlandı ancak SSL ayarları sıfırlanamadı', 'warning');
+        }
+    } catch (error) {
+        console.error('SSL ayarları sıfırlama hatası:', error);
+        addLogEntry('Ayarlar sıfırlandı ancak SSL ayarları sıfırlanamadı', 'warning');
+    }
 }
 
 // Ayarları yükle
@@ -488,12 +739,19 @@ async function loadSettings() {
             document.getElementById('https-port').value = settings.httpsPort || '443';
             document.getElementById('redis-port').value = settings.redisPort || '6379';
             document.getElementById('log-level').value = settings.logLevel || 'info';
-            document.getElementById('auto-start-redis').checked = settings.autoStartRedis || false;
             document.getElementById('auto-start-server').checked = settings.autoStartServer || false;
             
         } catch (error) {
             console.error('Normal ayarlar yüklenirken hata:', error);
         }
+    }
+    
+    // Windows başlangıcında otomatik başlatma durumunu kontrol et
+    try {
+        const isAutoStartEnabled = await window.electronAPI.checkAutoStart();
+        document.getElementById('auto-start-windows').checked = isAutoStartEnabled;
+    } catch (error) {
+        console.error('Otomatik başlatma durumu kontrol hatası:', error);
     }
     
     // SSL ayarlarını yükle
@@ -511,12 +769,26 @@ async function loadSettings() {
                 document.getElementById('key-file').value = ssl.keyFile || '';
                 document.getElementById('cert-file').value = ssl.certFile || '';
                 document.getElementById('ca-file').value = ssl.caFile || '';
+                
+                // Sadece gerçekten ayarlar varsa log göster
+                if (ssl.certificatePath && ssl.keyFile && ssl.certFile) {
+                    addLogEntry('SSL ayarları yüklendi (Let\'s Encrypt)', 'info');
+                }
             } else {
-                document.getElementById('cloudflare-cert').value = ssl.cloudflareOriginCert || '';
-                document.getElementById('cloudflare-key').value = ssl.cloudflareOriginKey || '';
+                // Cloudflare dosya yolları
+                document.getElementById('cloudflare-cert-path').value = ssl.cloudflareOriginCertPath || '';
+                document.getElementById('cloudflare-key-path').value = ssl.cloudflareOriginKeyPath || '';
+                
+                // Eski format desteği (geriye uyumluluk için)
+                if (!ssl.cloudflareOriginCertPath && ssl.cloudflareOriginCert) {
+                    addLogEntry('Eski Cloudflare sertifika formatı tespit edildi. Lütfen dosya olarak kaydedin.', 'warning');
+                }
+                
+                // Sadece gerçekten ayarlar varsa log göster
+                if (ssl.cloudflareOriginCertPath && ssl.cloudflareOriginKeyPath) {
+                    addLogEntry('SSL ayarları yüklendi (Cloudflare)', 'info');
+                }
             }
-            
-            addLogEntry('SSL ayarları yüklendi', 'info');
         }
     } catch (error) {
         console.error('SSL ayarları yüklenirken hata:', error);
@@ -609,9 +881,11 @@ async function saveSettingsWithSSL() {
         httpsPort: document.getElementById('https-port').value,
         redisPort: document.getElementById('redis-port').value,
         logLevel: document.getElementById('log-level').value,
-        autoStartRedis: document.getElementById('auto-start-redis').checked,
         autoStartServer: document.getElementById('auto-start-server').checked
     };
+    
+    // Windows başlangıcında otomatik başlatma ayarını güncelle
+    await updateAutoStart();
     
     // SSL ayarlarını ekle
     const sslType = document.getElementById('ssl-type').value;
@@ -620,61 +894,49 @@ async function saveSettingsWithSSL() {
     };
     
     if (sslType === 'local') {
-        const sourcePath = document.getElementById('certificate-path').value;
+        const certificatePath = document.getElementById('certificate-path').value;
         const keyFile = document.getElementById('key-file').value;
         const certFile = document.getElementById('cert-file').value;
         const caFile = document.getElementById('ca-file').value;
         
-        // Sertifika dosyalarını uygulama klasörüne kopyala
-        if (sourcePath && (keyFile || certFile)) {
-            showLoading('Sertifika dosyaları uygulama klasörüne kopyalanıyor...');
-            
-            try {
-                const copyResult = await window.electronAPI.copyCertificatesToApp(
-                    sourcePath, keyFile, certFile, caFile
-                );
-                
-                if (copyResult.success) {
-                    addLogEntry(`Sertifikalar uygulama klasörüne kopyalandı: ${copyResult.targetPath}`, 'success');
-                    
-                    // SSL ayarlarını güncelle - artık uygulama içindeki yolu kullan
-                    sslSettings.certificatePath = copyResult.targetPath;
-                    sslSettings.keyFile = keyFile;
-                    sslSettings.certFile = certFile;
-                    sslSettings.caFile = caFile;
-                    
-                    // Kopyalanan dosyaları logla
-                    copyResult.copiedFiles.forEach(file => {
-                        addLogEntry(`${file.type.toUpperCase()} dosyası: ${file.file} → ${file.target}`, 'info');
-                    });
-                    
-                } else {
-                    throw new Error(copyResult.error);
-                }
-                
-            } catch (copyError) {
-                hideLoading();
-                addLogEntry(`Sertifika kopyalama hatası: ${copyError.message}`, 'error');
-                await window.electronAPI.showMessageBox({
-                    type: 'error',
-                    title: 'Sertifika Kopyalama Hatası',
-                    message: 'Sertifika dosyaları uygulama klasörüne kopyalanamadı',
-                    detail: copyError.message
-                });
-                return;
-            }
-            
-            hideLoading();
-        } else {
-            // Sadece yol bilgisini kaydet (kopyalama yapma)
-            sslSettings.certificatePath = sourcePath;
-            sslSettings.keyFile = keyFile;
-            sslSettings.certFile = certFile;
-            sslSettings.caFile = caFile;
+        // Gerekli alanların dolu olduğunu kontrol et
+        if (!certificatePath || !keyFile || !certFile) {
+            await window.electronAPI.showMessageBox({
+                type: 'warning',
+                title: 'Eksik Bilgi',
+                message: 'SSL Sertifika Bilgileri Eksik',
+                detail: 'Lütfen sertifika klasörünü seçin ve key/cert dosya adlarını belirtin.'
+            });
+            return;
         }
-    } else {
-        sslSettings.cloudflareOriginCert = document.getElementById('cloudflare-cert').value;
-        sslSettings.cloudflareOriginKey = document.getElementById('cloudflare-key').value;
+        
+        // Sadece yol ve dosya adı bilgilerini kaydet (fiziksel kopyalama yapmadan)
+        sslSettings.certificatePath = certificatePath;
+        sslSettings.keyFile = keyFile;
+        sslSettings.certFile = certFile;
+        sslSettings.caFile = caFile || ''; // CA dosyası opsiyonel
+        
+        addLogEntry(`SSL sertifika yolu ayarlandı: ${certificatePath}`, 'info');
+        
+    } else if (sslType === 'cloudflare') {
+        const cloudflareCertPath = document.getElementById('cloudflare-cert-path').value;
+        const cloudflareKeyPath = document.getElementById('cloudflare-key-path').value;
+        
+        if (!cloudflareCertPath || !cloudflareKeyPath) {
+            await window.electronAPI.showMessageBox({
+                type: 'warning',
+                title: 'Eksik Bilgi',
+                message: 'Cloudflare Sertifika Dosyaları Eksik',
+                detail: 'Lütfen Cloudflare Origin Certificate ve Private Key dosyalarını seçin.'
+            });
+            return;
+        }
+        
+        // Cloudflare için de dosya yollarını kaydet (server-optimized.js ile uyumlu property isimleri)
+        sslSettings.cloudflareOriginCertPath = cloudflareCertPath;
+        sslSettings.cloudflareOriginKeyPath = cloudflareKeyPath;
+        
+        addLogEntry(`Cloudflare sertifika dosyaları ayarlandı`, 'info');
     }
     
     try {
@@ -691,7 +953,7 @@ async function saveSettingsWithSSL() {
                 type: 'info',
                 title: 'Ayarlar Kaydedildi',
                 message: 'Ayarlar başarıyla kaydedildi',
-                detail: 'SSL sertifikaları uygulama klasörüne kopyalandı ve ayarlar kaydedildi. Değişikliklerin etkili olması için server\'ı yeniden başlatın.'
+                detail: 'SSL sertifika yolu ve ayarları kaydedildi. Değişikliklerin etkili olması için server\'ı yeniden başlatın.'
             });
         } else {
             throw new Error(sslResult.error);
@@ -840,6 +1102,75 @@ function displaySSLFiles(files, categorizedFiles) {
     container.innerHTML = html;
 }
 
+// Cloudflare dosya seçimi fonksiyonu
+async function selectCloudflareFile(type) {
+    try {
+        showLoading('Dosya seçiliyor...');
+        
+        const result = await window.electronAPI.selectFile({
+            title: type === 'cert' ? 'Cloudflare Certificate Dosyasını Seçin' : 'Cloudflare Private Key Dosyasını Seçin',
+            filters: [
+                { name: 'PEM Files', extensions: ['pem'] },
+                { name: 'Certificate Files', extensions: ['crt', 'cert'] },
+                { name: 'Key Files', extensions: ['key'] },
+                { name: 'All Files', extensions: ['*'] }
+            ]
+        });
+        
+        if (result.success && !result.canceled && result.path) {
+            if (type === 'cert') {
+                document.getElementById('cloudflare-cert-path').value = result.path;
+                addLogEntry(`Cloudflare certificate dosyası seçildi: ${result.path}`, 'success');
+            } else {
+                document.getElementById('cloudflare-key-path').value = result.path;
+                addLogEntry(`Cloudflare private key dosyası seçildi: ${result.path}`, 'success');
+            }
+        }
+    } catch (error) {
+        addLogEntry(`Dosya seçme hatası: ${error.message}`, 'error');
+        await window.electronAPI.showMessageBox({
+            type: 'error',
+            title: 'Hata',
+            message: 'Dosya seçilemedi',
+            detail: error.message
+        });
+    } finally {
+        hideLoading();
+    }
+}
+
+// Window'a fonksiyonu ekle (inline onclick için)
+window.selectCloudflareFile = selectCloudflareFile;
+
+// Uygulama başladığında otomatik server başlatma kontrolü
+async function checkAutoStartServer() {
+    // Eğer Windows başlangıcından geliyorsak (--autostart parametresi ile),
+    // main.js zaten server'ı başlatacak, burada başlatmaya gerek yok
+    const urlParams = new URLSearchParams(window.location.search);
+    const isWindowsAutoStart = urlParams.get('autostart') === 'true';
+    
+    if (isWindowsAutoStart) {
+        addLogEntry('Windows başlangıcından otomatik başlatma tespit edildi, main process tarafından başlatılacak', 'info');
+        return;
+    }
+    
+    const savedSettings = localStorage.getItem('scada-bridge-settings');
+    if (savedSettings) {
+        try {
+            const settings = JSON.parse(savedSettings);
+            if (settings.autoStartServer) {
+                addLogEntry('Otomatik server başlatma ayarı aktif, SSL kontrolü başarılı', 'info');
+                addLogEntry('Server ve Redis otomatik olarak başlatılıyor...', 'info');
+                setTimeout(() => {
+                    startServer();
+                }, 1000); // 1 saniye bekle
+            }
+        } catch (error) {
+            console.error('Otomatik başlatma kontrolü hatası:', error);
+        }
+    }
+}
+
 async function testSSLConfiguration() {
     try {
         showLoading('SSL konfigürasyonu test ediliyor...');
@@ -862,20 +1193,24 @@ async function testSSLConfiguration() {
             };
             
         } else {
-            const cert = document.getElementById('cloudflare-cert').value;
-            const key = document.getElementById('cloudflare-key').value;
+            const certPath = document.getElementById('cloudflare-cert-path').value;
+            const keyPath = document.getElementById('cloudflare-key-path').value;
             
-            if (!cert || !key) {
-                throw new Error('Lütfen Cloudflare sertifika ve private key alanlarını doldurun');
+            if (!certPath || !keyPath) {
+                throw new Error('Lütfen Cloudflare sertifika dosyalarını seçin');
             }
             
-            if (!cert.includes('BEGIN CERTIFICATE') || !key.includes('BEGIN PRIVATE KEY')) {
-                throw new Error('Geçersiz sertifika formatı');
+            // Dosya varlığını kontrol et
+            const certExists = await window.electronAPI.checkFileExists(certPath);
+            const keyExists = await window.electronAPI.checkFileExists(keyPath);
+            
+            if (!certExists || !keyExists) {
+                throw new Error('Belirtilen sertifika dosyaları bulunamadı');
             }
             
             testResult = {
                 success: true,
-                message: 'Cloudflare Origin Certificate formatı geçerli görünüyor'
+                message: 'Cloudflare sertifika dosyaları bulundu ve erişilebilir'
             };
         }
         

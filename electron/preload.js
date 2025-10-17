@@ -20,8 +20,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSSLSettings: (settings) => ipcRenderer.invoke('save-ssl-settings', settings),
   loadSSLSettings: () => ipcRenderer.invoke('load-ssl-settings'),
   selectCertificateFolder: () => ipcRenderer.invoke('select-certificate-folder'),
-  copyCertificatesToApp: (sourcePath, keyFile, certFile, caFile) =>
-    ipcRenderer.invoke('copy-certificates-to-app', sourcePath, keyFile, certFile, caFile),
+  selectFile: (options) => ipcRenderer.invoke('select-file', options),
+  checkFileExists: (filePath) => ipcRenderer.invoke('check-file-exists', filePath),
+  
+  // Otomatik başlatma
+  setAutoStart: (enable) => ipcRenderer.invoke('set-auto-start', enable),
+  checkAutoStart: () => ipcRenderer.invoke('check-auto-start'),
   
   // Dialog'lar
   showMessageBox: (options) => ipcRenderer.invoke('show-message-box', options),
