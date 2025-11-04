@@ -271,6 +271,60 @@ async function startWorker() {
     }
   }));
 
+  // Support page route
+  app.get('/support', (req, res) => {
+    let supportPath;
+    
+    // Paketlenmiş Electron uygulaması içinde mi kontrol et
+    if (__dirname.includes('app.asar.unpacked')) {
+      // Paketlenmiş uygulamada, support.html dosyası app.asar.unpacked içinde
+      supportPath = path.join(__dirname, 'support.html');
+      logger.debug('Paketlenmiş uygulama support.html yolu:', supportPath);
+    } else if (process.env.ELECTRON_RUN_AS_NODE || process.versions.electron) {
+      // Development modunda Electron uygulaması
+      supportPath = path.join(__dirname, 'support.html');
+      logger.debug('Development Electron support.html yolu:', supportPath);
+    } else {
+      // Standalone Node.js uygulaması
+      supportPath = path.join(__dirname, 'support.html');
+      logger.debug('Standalone support.html yolu:', supportPath);
+    }
+    
+    res.sendFile(supportPath, (err) => {
+      if (err) {
+        logger.error('Error sending support.html:', err);
+        res.status(500).send('Support page not found');
+      }
+    });
+  });
+
+  // Privacy Policy page route
+  app.get('/privacy-policy', (req, res) => {
+    let privacyPath;
+    
+    // Paketlenmiş Electron uygulaması içinde mi kontrol et
+    if (__dirname.includes('app.asar.unpacked')) {
+      // Paketlenmiş uygulamada, privacy-policy.html dosyası app.asar.unpacked içinde
+      privacyPath = path.join(__dirname, 'privacy-policy.html');
+      logger.debug('Paketlenmiş uygulama privacy-policy.html yolu:', privacyPath);
+    } else if (process.env.ELECTRON_RUN_AS_NODE || process.versions.electron) {
+      // Development modunda Electron uygulaması
+      privacyPath = path.join(__dirname, 'privacy-policy.html');
+      logger.debug('Development Electron privacy-policy.html yolu:', privacyPath);
+    } else {
+      // Standalone Node.js uygulaması
+      privacyPath = path.join(__dirname, 'privacy-policy.html');
+      logger.debug('Standalone privacy-policy.html yolu:', privacyPath);
+    }
+    
+    res.sendFile(privacyPath, (err) => {
+      if (err) {
+        logger.error('Error sending privacy-policy.html:', err);
+        res.status(500).send('Privacy Policy page not found');
+      }
+    });
+  });
+
   // SSL sertifikalarını dinamik olarak yükle
   function loadSSLCertificates() {
     // SSL ayarları dosyasının yolunu belirle

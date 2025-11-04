@@ -74,6 +74,8 @@
       "server-optimized.js",
       "redis-service.js",
       "register-processor-worker.js",
+      "support.html",
+      "privacy-policy.html",
       "package.json",
       ".env",
       "node_modules/**/*",
@@ -93,6 +95,8 @@
       "server-optimized.js",
       "redis-service.js",
       "register-processor-worker.js",
+      "support.html",
+      "privacy-policy.html",
       "node_modules/**/*"
     ],
     "extraResources": [
@@ -113,7 +117,9 @@
           "arch": ["x64", "ia32"]
         }
       ],
-      "requestedExecutionLevel": "requireAdministrator"
+      "requestedExecutionLevel": "requireAdministrator",
+      "sign": false,
+      "signingHashAlgorithms": []
     },
     "mac": {
       "target": [

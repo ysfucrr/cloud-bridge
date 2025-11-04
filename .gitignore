@@ -1,3 +1,4 @@
 node_modules
 dist
 redis
+package-lock.json
