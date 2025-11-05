@@ -31,7 +31,10 @@
     "redis",
     "worker-threads"
   ],
-  "author": "SCADA Team",
+  "author": {
+  "name": "yusufucar",
+  "email": "yusuf@example.com"
+},
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
