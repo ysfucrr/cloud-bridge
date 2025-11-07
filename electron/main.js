@@ -418,13 +418,17 @@ async function startServer() {
     const nodePath = path.join(appRoot, 'node_modules');
     console.log('Server için node_modules yolu:', nodePath);
     
-    serverProcess = spawn('node', [APP_CONFIG.serverScript], {
+    const serverEnv = {
+      ...process.env,
+      SHOW_STARTUP_INFO: 'true',
+      NODE_PATH: nodePath,
+      ELECTRON_RUN_AS_NODE: '1'
+    };
+
+    // Electron'ın kendi Node runtime'ını kullanarak server scriptini çalıştır
+    serverProcess = spawn(process.execPath, [APP_CONFIG.serverScript], {
       stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        SHOW_STARTUP_INFO: 'true',
-        NODE_PATH: nodePath
-      }
+      env: serverEnv
     });
 
     let serverStarted = false;
